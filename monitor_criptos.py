@@ -1,70 +1,63 @@
 import os
 import requests
-import time
-import datetime
+import telegram
+from flask import Flask
+from datetime import datetime
 import pytz
-from telegram import Bot
+import asyncio
 
+app = Flask(__name__)
+
+# Variables de entorno
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:30")
+ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:45")
 
-MONEDAS = ["bitcoin", "cardano", "solana", "shiba-inu"]
-NOMBRES = {"bitcoin": "BTC", "cardano": "ADA", "solana": "SOL", "shiba-inu": "SHIBA"}
-API_URL = "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=eur"
+# Render asigna dinámicamente el puerto
+PORT = int(os.environ.get("PORT", 10000))
 
-INTERVALO_MINUTOS = 10
-VARIACION_ALERTA = 2.0  # %
+criptos = ['BTC', 'ADA', 'SHIB', 'SOL']
+url_base = "https://api.binance.com/api/v3/ticker/price?symbol="
 
-bot = Bot(token=TOKEN)
-precios_anteriores = {}
+bot = telegram.Bot(token=TOKEN)
 
-def obtener_precios():
-    ids = ",".join(MONEDAS)
-    url = API_URL.format(ids)
-    r = requests.get(url)
-    return r.json()
-
-def enviar_mensaje(texto):
+def obtener_precio(cripto):
     try:
-        bot.send_message(chat_id=CHAT_ID, text=texto)
+        response = requests.get(url_base + cripto + "USDT")
+        response.raise_for_status()
+        precio = float(response.json()["price"])
+        return precio
     except Exception as e:
-        print("Error enviando mensaje:", e)
+        return f"Error obteniendo {cripto}: {str(e)}"
 
-def es_hora_de_resumen():
-    ahora = datetime.datetime.now(pytz.timezone("Europe/Madrid"))  # o Europe/Amsterdam
-    hora_actual = ahora.strftime("%H:%M")
-    return RESUMEN_DIARIO and hora_actual == RESUMEN_HORA
-
-def generar_resumen(precios):
-    ahora = datetime.datetime.now(pytz.timezone("Europe/Madrid")).strftime("%d-%m %H:%M")
-    resumen = f"📊 *Resumen diario* ({ahora}):\n"
-    for k, v in precios.items():
-        simbolo = NOMBRES.get(k, k.upper())
-        resumen += f"- {simbolo}: {v['eur']} €\n"
+def generar_resumen():
+    ahora = datetime.now(pytz.timezone("Europe/Madrid")).strftime("%Y-%m-%d %H:%M:%S")
+    resumen = f"📊 *Resumen Diario - {ahora}* 📊\n\n"
+    for cripto in criptos:
+        precio = obtener_precio(cripto)
+        resumen += f"💰 {cripto}: {precio} USDT\n"
     return resumen
 
-def detectar_cambios(precios):
-    for k, v in precios.items():
-        actual = v["eur"]
-        anterior = precios_anteriores.get(k)
-        if anterior:
-            variacion = ((actual - anterior) / anterior) * 100
-            if abs(variacion) >= VARIACION_ALERTA:
-                direccion = "⬆️ subió" if variacion > 0 else "⬇️ bajó"
-                mensaje = f"{NOMBRES[k]} {direccion} {variacion:.2f}% → {actual} €"
-                enviar_mensaje(mensaje)
-        precios_anteriores[k] = actual
+@app.route("/")
+def home():
+    return "Monitor Criptos activo!"
+
+async def enviar_resumen_diario():
+    while True:
+        if ENVIAR_RESUMEN_DIARIO:
+            ahora = datetime.now(pytz.timezone("Europe/Madrid")).strftime("%H:%M")
+            if ahora == RESUMEN_HORA:
+                resumen = generar_resumen()
+                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode="Markdown")
+                await asyncio.sleep(60)  # Evita reenvíos múltiples en el mismo minuto
+        await asyncio.sleep(10)
+
+def iniciar_loop_async():
+    loop = asyncio.get_event_loop()
+    if not loop.is_running():
+        loop.create_task(enviar_resumen_diario())
 
 if __name__ == "__main__":
-    while True:
-        try:
-            precios = obtener_precios()
-            detectar_cambios(precios)
-            if es_hora_de_resumen():
-                resumen = generar_resumen(precios)
-                enviar_mensaje(resumen)
-        except Exception as e:
-            print("Error en ejecución:", e)
-        time.sleep(INTERVALO_MINUTOS * 60)
+    iniciar_loop_async()
+    app.run(host="0.0.0.0", port=PORT)
