@@ -2,6 +2,11 @@ services:
   - type: web
     name: monitor-criptos
     env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: ./start.sh
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn monitor_criptos:app"
+    envVars:
+      - key: RESUMEN_HORA
+        value: "22:00"
+      - key: ENVIAR_RESUMEN_DIARIO
+        value: "true"
+
