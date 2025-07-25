@@ -1,4 +1,4 @@
-import threading, asyncio, requests
+import threading, asyncio, requests, os
 import pandas as pd, numpy as np
 from datetime import datetime
 from telegram import Bot
@@ -10,11 +10,11 @@ threshold = 3.0
 rsi_period = 14
 
 # 🔐 TELEGRAM
-import os
-from telegram import Bot
-TOKEN = os.getenv("TOKEN")  # No pongas el token directamente aquí
-bot = Bot(token=TOKEN)
+TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO") == "1"
+
+bot = Bot(token=TOKEN)
 
 # 🌍 FLASK APP PARA RENDER
 app = Flask(__name__)
@@ -88,6 +88,30 @@ async def analizar(symbol):
         except Exception as e:
             print(f"⚠️ Error al enviar mensaje de {symbol}: {e}")
 
+async def enviar_resumen_diario():
+    ya_enviado = False
+    while True:
+        ahora = datetime.now()
+        if ENVIAR_RESUMEN_DIARIO and ahora.hour == 11 and not ya_enviado:
+            resumen = "🗓️ *Resumen diario de criptomonedas*\n"
+            for symbol in symbols:
+                df = get_klines(symbol)
+                if df is None or len(df) < rsi_period + 1:
+                    resumen += f"\n⚠️ {symbol}: sin datos"
+                    continue
+                last = df['close'].iloc[-1]
+                rsi_value = calc_rsi(df['close'], rsi_period).iloc[-1]
+                resumen += f"\n💰 {symbol}: {last:.4f} USD | RSI: {rsi_value:.2f}"
+            try:
+                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode='Markdown')
+                print("✅ Resumen diario enviado")
+            except Exception as e:
+                print(f"⚠️ Error al enviar resumen diario: {e}")
+            ya_enviado = True
+        elif ahora.hour != 11:
+            ya_enviado = False
+        await asyncio.sleep(60)
+
 async def main():
     while True:
         print(f"⏰ Ejecutando análisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -97,7 +121,10 @@ async def main():
         await asyncio.sleep(60)
 
 def start_bot_loop():
-    asyncio.run(main())
+    asyncio.run(asyncio.gather(
+        main(),
+        enviar_resumen_diario()
+    ))
 
 # 🚀 Iniciar bot + webserver
 if __name__ == '__main__':
