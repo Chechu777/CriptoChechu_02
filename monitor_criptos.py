@@ -16,7 +16,7 @@ bot = Bot(token=TOKEN)
 
 # 🕒 RESUMEN DIARIO
 ENVIAR_RESUMEN = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-HORA_RESUMEN = os.getenv("RESUMEN_HORA", "21:11")
+HORA_RESUMEN = os.getenv("RESUMEN_HORA", "21:16")
 resumen_enviado_hoy = None  # Controla que solo se envíe una vez al día
 
 # 🌍 FLASK APP PARA RENDER
