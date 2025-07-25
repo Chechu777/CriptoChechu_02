@@ -10,7 +10,7 @@ from telegram import Bot
 # --- Configuración desde variables de entorno ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:10")
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:20")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 
 CRYPTO_IDS = ["bitcoin", "cardano", "solana", "shiba-inu"]
