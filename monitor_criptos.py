@@ -12,9 +12,12 @@ rsi_period = 14
 # 🔐 TELEGRAM
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO") == "1"
-
 bot = Bot(token=TOKEN)
+
+# 🕒 RESUMEN DIARIO
+ENVIAR_RESUMEN = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+HORA_RESUMEN = os.getenv("RESUMEN_HORA", "21:11")
+resumen_enviado_hoy = None  # Controla que solo se envíe una vez al día
 
 # 🌍 FLASK APP PARA RENDER
 app = Flask(__name__)
@@ -63,70 +66,4 @@ async def analizar(symbol):
         print(f"⛔ Datos insuficientes para {symbol}")
         return
 
-    last = df['close'].iloc[-1]
-    prev = df['close'].iloc[-2]
-    rsi_value = calc_rsi(df['close'], rsi_period).iloc[-1]
-
-    if np.isnan(rsi_value):
-        print(f"⚠️ RSI no disponible para {symbol}")
-        return
-
-    change = ((last - prev) / prev) * 100
-    mensaje = f"💰 {symbol} | Precio: {last:.4f} USD\nCambio: {change:.2f}% | RSI: {rsi_value:.2f}"
-
-    if abs(change) >= threshold:
-        if rsi_value < 30:
-            mensaje += "\n✅ SUGERENCIA: COMPRAR (RSI bajo)"
-        elif rsi_value > 70:
-            mensaje += "\n🔴 SUGERENCIA: VENDER (RSI alto)"
-        else:
-            mensaje += "\n🟡 OBSERVAR: Movimiento sin señal clara"
-
-        print(mensaje)
-        try:
-            await bot.send_message(chat_id=CHAT_ID, text=mensaje)
-        except Exception as e:
-            print(f"⚠️ Error al enviar mensaje de {symbol}: {e}")
-
-async def enviar_resumen_diario():
-    ya_enviado = False
-    while True:
-        ahora = datetime.now()
-        if ENVIAR_RESUMEN_DIARIO and ahora.hour == 11 and not ya_enviado:
-            resumen = "🗓️ *Resumen diario de criptomonedas*\n"
-            for symbol in symbols:
-                df = get_klines(symbol)
-                if df is None or len(df) < rsi_period + 1:
-                    resumen += f"\n⚠️ {symbol}: sin datos"
-                    continue
-                last = df['close'].iloc[-1]
-                rsi_value = calc_rsi(df['close'], rsi_period).iloc[-1]
-                resumen += f"\n💰 {symbol}: {last:.4f} USD | RSI: {rsi_value:.2f}"
-            try:
-                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode='Markdown')
-                print("✅ Resumen diario enviado")
-            except Exception as e:
-                print(f"⚠️ Error al enviar resumen diario: {e}")
-            ya_enviado = True
-        elif ahora.hour != 11:
-            ya_enviado = False
-        await asyncio.sleep(60)
-
-async def main():
-    while True:
-        print(f"⏰ Ejecutando análisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        for moneda in symbols:
-            await analizar(moneda)
-            await asyncio.sleep(1)
-        await asyncio.sleep(60)
-
-def start_bot_loop():
-    asyncio.run(asyncio.gather(
-        main(),
-        enviar_resumen_diario()
-    ))
-
-# 🚀 Iniciar bot + webserver
-if __name__ == '__main__':
-    threading.Thread(target=start_bot_loop).start()
-    app.run(host='0.0.0.0', port=10000)
+    last = df['close'].iloc
