@@ -1,11 +1,7 @@
-import requests, pandas as pd, numpy as np, time
+import asyncio
+import requests, pandas as pd, numpy as np
 from datetime import datetime
 from telegram import Bot
-from telegram.constants import ParseMode  # Opcional
-from telegram.ext import Application
-
-application = Application.builder().token(TOKEN).build()
-await application.bot.send_message(chat_id=CHAT_ID, text="Bot iniciado")  # Usa async
 
 # ⚙️ CONFIGURACIÓN
 symbols = ['BTCUSDT', 'ADAUSDT', 'SOLUSDT', 'SHIBUSDT']
@@ -13,7 +9,7 @@ threshold = 3.0  # % cambio significativo
 rsi_period = 14
 
 # 🔐 TELEGRAM
-TOKEN = '8382852811:AAG1v_mbYRNaOIU4vJxC1PywM8qSW1p3w88'  # <-- cambia este token urgente
+TOKEN = 'TU_TOKEN_NUEVO_AQUI'
 CHAT_ID = '6232492493'
 bot = Bot(token=TOKEN)
 
@@ -49,7 +45,7 @@ def calc_rsi(prices, period=14):
     return rsi
 
 # 🔍 Analizar moneda
-def analizar(symbol):
+async def analizar(symbol):
     df = get_klines(symbol)
     if df is None or len(df) < rsi_period + 1:
         print(f"⛔ Datos insuficientes para {symbol}")
@@ -76,18 +72,18 @@ def analizar(symbol):
 
         print(mensaje)
         try:
-            bot.send_message(chat_id=CHAT_ID, text=mensaje)
+            await bot.send_message(chat_id=CHAT_ID, text=mensaje)
         except Exception as e:
             print(f"⚠️ Error al enviar mensaje de {symbol}: {e}")
 
-# ♻️ Bucle principal (cada minuto)
-while True:
-    try:
+# ♻️ Bucle principal async
+async def main():
+    while True:
         print(f"⏰ Ejecutando análisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         for moneda in symbols:
-            analizar(moneda)
-            time.sleep(1)  # Evitar rate limiting en Binance
-        time.sleep(60)
-    except Exception as e:
-        print("❌ ERROR GENERAL:", e)
-        time.sleep(60)
+            await analizar(moneda)
+            await asyncio.sleep(1)  # Evitar rate limit
+        await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main())
