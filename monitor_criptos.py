@@ -1,6 +1,11 @@
 import requests, pandas as pd, numpy as np, time
 from datetime import datetime
 from telegram import Bot
+from telegram.constants import ParseMode  # Opcional
+from telegram.ext import Application
+
+application = Application.builder().token(TOKEN).build()
+await application.bot.send_message(chat_id=CHAT_ID, text="Bot iniciado")  # Usa async
 
 # ⚙️ CONFIGURACIÓN
 symbols = ['BTCUSDT', 'ADAUSDT', 'SOLUSDT', 'SHIBUSDT']
