@@ -1,6 +1,5 @@
 import os
 import asyncio
-import threading
 import time
 import requests
 import pandas as pd
@@ -10,7 +9,7 @@ from telegram import Bot
 # --- Configuración desde variables de entorno ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "21:48")  # Formato HH:MM
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:10")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 
 CRYPTO_IDS = ["bitcoin", "cardano", "solana", "shiba-inu"]
@@ -30,12 +29,12 @@ if not TOKEN or not CHAT_ID:
 bot = Bot(token=TOKEN)
 precios_anteriores = {}
 
-# --- Flask App ---
+# --- Flask App (para que Render vea vida) ---
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def index():
-    return "✅ Bot Cripto activo"
+    return "✅ Bot Cripto activo y corriendo."
 
 # --- Funciones de utilidad ---
 def obtener_precios_actuales():
@@ -111,19 +110,18 @@ async def enviar_resumen_diario():
                     resumen += f"• *{simbolo}*: {precio:.2f} EUR | RSI: {rsi if rsi is not None else 'N/A'}\n"
 
                 await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode="Markdown")
-                await asyncio.sleep(60)  # evita múltiples envíos en el mismo minuto
+                await asyncio.sleep(60)
         await asyncio.sleep(30)
 
-# --- Arranque del bot ---
-def start_bot_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(asyncio.gather(
-        monitorear_cambios(),
-        enviar_resumen_diario()
-    ))
+# --- Main asíncrono ---
+async def main():
+    tareas = [monitorear_cambios()]
+    if ENVIAR_RESUMEN_DIARIO:
+        tareas.append(enviar_resumen_diario())
+    await asyncio.gather(*tareas)
 
-# --- Main ---
+# --- Lanzar Flask + Bot ---
 if __name__ == "__main__":
-    threading.Thread(target=start_bot_loop).start()
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
     app.run(host="0.0.0.0", port=10000)
