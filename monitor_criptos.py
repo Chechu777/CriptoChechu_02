@@ -4,6 +4,7 @@ import telegram
 from flask import Flask
 from datetime import datetime
 import pytz
+import time
 
 app = Flask(__name__)
 
@@ -11,6 +12,7 @@ app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
 criptos = ['BTC', 'ADA', 'SHIB', 'SOL']
 url_base = "https://api.binance.com/api/v3/ticker/price?symbol="
@@ -40,9 +42,13 @@ def home():
 @app.route("/resumen")
 def resumen():
     if ENVIAR_RESUMEN_DIARIO:
-        mensaje = generar_resumen()
-        bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
-        return "Resumen enviado por Telegram ✅"
+        ahora = datetime.now(pytz.timezone("Europe/Madrid")).strftime("%H:%M")
+        if ahora == RESUMEN_HORA:
+            mensaje = generar_resumen()
+            bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
+            return "Resumen ENVIADO a la hora programada ✅"
+        else:
+            return f"No es hora del resumen todavía. Ahora: {ahora} / Programado: {RESUMEN_HORA} ⏳"
     else:
         return "ENVIAR_RESUMEN_DIARIO está desactivado ❌"
 
