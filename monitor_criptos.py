@@ -1,89 +1,85 @@
+import os
 import asyncio
 import threading
-import logging
-from flask import Flask
+import time
+import requests
 from telegram import Bot
-from telegram.constants import ParseMode
-from telegram.error import TelegramError
-from telegram.ext import Application, CommandHandler
-import yfinance as yf
-import datetime
-import os
+from telegram.constants import ParseMode  # Si da error, usa 'Markdown' directo como string
+from flask import Flask
 
-# --- Configuración ---
-TOKEN = os.getenv("BOT_TOKEN")  # Usa variable de entorno segura en Render
-CHAT_ID = os.getenv("CHAT_ID")
-MONEDAS = ["ADA-USD", "SHIB-USD", "SOL-USD", "BTC-USD"]
-INTERVALO_SEGUNDOS = 300  # 5 minutos
+# Config
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CRYPTO_IDS = ["bitcoin", "cardano", "solana", "shiba-inu"]
+API_URL = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(CRYPTO_IDS)}&vs_currencies=eur"
 
-# --- Setup logging ---
-logging.basicConfig(level=logging.INFO)
+if not TOKEN or not CHAT_ID:
+    raise Exception("Faltan variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
 
-# --- Flask para mantener servicio activo ---
+bot = Bot(token=TOKEN)
+
+# Precio anterior para comparación
+precios_anteriores = {}
+
+# App Flask para mantener vivo en Render
 app = Flask(__name__)
 
-@app.route("/")
+@app.route('/')
 def index():
-    return "Bot Cripto en ejecución"
+    return "Bot activo ✅"
 
-# --- Funciones principales ---
-async def obtener_precio_actual(moneda):
-    data = yf.download(tickers=moneda, period='1d', interval='1m')
-    if data.empty:
-        return None
-    return round(data['Close'].iloc[-1], 6)
-
-async def enviar_alerta(bot, moneda, precio):
+def obtener_precios():
     try:
-        msg = f"🚨 <b>{moneda}</b> ha cambiado. Precio actual: <b>{precio}</b> USD"
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.HTML)
-    except TelegramError as e:
-        logging.error(f"Error al enviar mensaje: {e}")
+        response = requests.get(API_URL)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print("Error al obtener precios:", e)
+        return {}
 
-async def monitorear(bot):
-    precios_anteriores = {}
+def detectar_cambios(precios_actuales):
+    mensajes = []
+    for crypto, datos in precios_actuales.items():
+        actual = datos["eur"]
+        anterior = precios_anteriores.get(crypto)
+
+        if anterior:
+            cambio = ((actual - anterior) / anterior) * 100
+            if abs(cambio) >= 3:
+                emoji = "📈" if cambio > 0 else "📉"
+                mensajes.append(f"{emoji} *{crypto.upper()}*: {actual:.2f} EUR ({cambio:+.2f}%)")
+
+        precios_anteriores[crypto] = actual
+    return mensajes
+
+async def enviar_resumen_diario():
     while True:
-        for moneda in MONEDAS:
-            precio = await obtener_precio_actual(moneda)
-            if precio:
-                anterior = precios_anteriores.get(moneda)
-                if anterior and abs(precio - anterior) > anterior * 0.01:
-                    await enviar_alerta(bot, moneda, precio)
-                precios_anteriores[moneda] = precio
-        await asyncio.sleep(INTERVALO_SEGUNDOS)
+        precios = obtener_precios()
+        if precios:
+            resumen = "*Resumen diario de criptos 🕗*\n\n"
+            for crypto, datos in precios.items():
+                precio = datos["eur"]
+                resumen += f"• *{crypto.upper()}*: {precio:.2f} EUR\n"
 
-async def enviar_resumen_diario(bot):
+            await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode=ParseMode.MARKDOWN)
+        await asyncio.sleep(86400)  # 24h
+
+async def monitorear_cambios():
     while True:
-        ahora = datetime.datetime.now()
-        if ahora.hour == 21 and ahora.minute == 28:
-            resumen = "📊 <b>Resumen Diario:</b>\n"
-            for moneda in MONEDAS:
-                precio = await obtener_precio_actual(moneda)
-                if precio:
-                    resumen += f"🔹 {moneda}: <b>{precio}</b> USD\n"
-            try:
-                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode=ParseMode.HTML)
-            except TelegramError as e:
-                logging.error(f"Error al enviar resumen: {e}")
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# --- Bot y loop ---
-async def main_async():
-    bot = Bot(token=TOKEN)
-    await asyncio.gather(
-        monitorear(bot),
-        enviar_resumen_diario(bot)
-    )
+        precios = obtener_precios()
+        cambios = detectar_cambios(precios)
+        for mensaje in cambios:
+            await bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode=ParseMode.MARKDOWN)
+        await asyncio.sleep(300)  # cada 5 min
 
 def start_bot_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(main_async())
+    loop.run_until_complete(asyncio.gather(
+        enviar_resumen_diario(),
+        monitorear_cambios()
+    ))
 
-# --- Lanzar bot en hilo paralelo ---
-threading.Thread(target=start_bot_loop, daemon=True).start()
-
-# --- Ejecutar Flask para mantener app viva en Render ---
 if __name__ == "__main__":
+    threading.Thread(target=start_bot_loop).start()
     app.run(host="0.0.0.0", port=10000)
