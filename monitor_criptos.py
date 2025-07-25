@@ -4,7 +4,6 @@ import telegram
 from flask import Flask
 from datetime import datetime
 import pytz
-import asyncio
 
 app = Flask(__name__)
 
@@ -12,10 +11,6 @@ app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:45")
-
-# Render asigna dinámicamente el puerto
-PORT = int(os.environ.get("PORT", 10000))
 
 criptos = ['BTC', 'ADA', 'SHIB', 'SOL']
 url_base = "https://api.binance.com/api/v3/ticker/price?symbol="
@@ -26,10 +21,9 @@ def obtener_precio(cripto):
     try:
         response = requests.get(url_base + cripto + "USDT")
         response.raise_for_status()
-        precio = float(response.json()["price"])
-        return precio
+        return float(response.json()["price"])
     except Exception as e:
-        return f"Error obteniendo {cripto}: {str(e)}"
+        return f"Error: {str(e)}"
 
 def generar_resumen():
     ahora = datetime.now(pytz.timezone("Europe/Madrid")).strftime("%Y-%m-%d %H:%M:%S")
@@ -41,23 +35,17 @@ def generar_resumen():
 
 @app.route("/")
 def home():
-    return "Monitor Criptos activo!"
+    return "✅ Bot Criptos activo."
 
-async def enviar_resumen_diario():
-    while True:
-        if ENVIAR_RESUMEN_DIARIO:
-            ahora = datetime.now(pytz.timezone("Europe/Madrid")).strftime("%H:%M")
-            if ahora == RESUMEN_HORA:
-                resumen = generar_resumen()
-                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode="Markdown")
-                await asyncio.sleep(60)  # Evita reenvíos múltiples en el mismo minuto
-        await asyncio.sleep(10)
-
-def iniciar_loop_async():
-    loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        loop.create_task(enviar_resumen_diario())
+@app.route("/resumen")
+def resumen():
+    if ENVIAR_RESUMEN_DIARIO:
+        mensaje = generar_resumen()
+        bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
+        return "Resumen enviado por Telegram ✅"
+    else:
+        return "ENVIAR_RESUMEN_DIARIO está desactivado ❌"
 
 if __name__ == "__main__":
-    iniciar_loop_async()
-    app.run(host="0.0.0.0", port=PORT)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
