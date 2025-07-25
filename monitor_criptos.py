@@ -8,7 +8,7 @@ threshold = 3.0  # % cambio significativo
 rsi_period = 14
 
 # 🔐 TELEGRAM
-TOKEN = 'TU_NUEVO_TOKEN'  # <-- cambia este token urgente
+TOKEN = '8382852811:AAG1v_mbYRNaOIU4vJxC1PywM8qSW1p3w88'  # <-- cambia este token urgente
 CHAT_ID = '6232492493'
 bot = Bot(token=TOKEN)
 
