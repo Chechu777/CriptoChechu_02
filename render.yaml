@@ -1,9 +1,7 @@
 services:
   - type: web
-    name: chechu-cripto-bot
-    runtime: python
+    name: monitor-criptos
+    env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python monitor_criptos.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.13
+    startCommand: ./start.sh
