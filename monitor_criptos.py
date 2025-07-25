@@ -10,7 +10,8 @@ threshold = 3.0
 rsi_period = 14
 
 # 🔐 TELEGRAM
-TOKEN = 'TU_TOKEN_NUEVO_AQUI'
+import os
+TOKEN = os.getenv("TOKEN")
 CHAT_ID = '6232492493'
 bot = Bot(token=TOKEN)
 
