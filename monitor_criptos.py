@@ -11,8 +11,8 @@ rsi_period = 14
 
 # 🔐 TELEGRAM
 import os
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = '6232492493'
+from telegram import Bot
+TOKEN = os.getenv("TOKEN")  # No pongas el token directamente aquí
 bot = Bot(token=TOKEN)
 
 # 🌍 FLASK APP PARA RENDER
