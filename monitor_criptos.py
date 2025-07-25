@@ -5,7 +5,7 @@ import datetime
 import pytz
 from telegram import Bot
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:30")
