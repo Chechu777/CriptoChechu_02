@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import threading
 import requests
 import pandas as pd
 from flask import Flask
@@ -29,12 +30,15 @@ if not TOKEN or not CHAT_ID:
 bot = Bot(token=TOKEN)
 precios_anteriores = {}
 
-# --- Flask App (para que Render vea vida) ---
+# --- Flask App (para Render) ---
 app = Flask(__name__)
 
 @app.route("/")
 def index():
     return "✅ Bot Cripto activo y corriendo."
+
+def iniciar_flask():
+    app.run(host="0.0.0.0", port=10000)
 
 # --- Funciones de utilidad ---
 def obtener_precios_actuales():
@@ -113,15 +117,13 @@ async def enviar_resumen_diario():
                 await asyncio.sleep(60)
         await asyncio.sleep(30)
 
-# --- Main asíncrono ---
+# --- Lanzar todo ---
 async def main():
     tareas = [monitorear_cambios()]
     if ENVIAR_RESUMEN_DIARIO:
         tareas.append(enviar_resumen_diario())
     await asyncio.gather(*tareas)
 
-# --- Lanzar Flask + Bot ---
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    app.run(host="0.0.0.0", port=10000)
+    threading.Thread(target=iniciar_flask).start()
+    asyncio.run(main())
