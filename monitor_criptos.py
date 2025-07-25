@@ -1,11 +1,12 @@
-import asyncio
-import requests, pandas as pd, numpy as np
+import threading, asyncio, requests
+import pandas as pd, numpy as np
 from datetime import datetime
 from telegram import Bot
+from flask import Flask
 
-# ⚙️ CONFIGURACIÓN
+# ⚙️ CONFIG
 symbols = ['BTCUSDT', 'ADAUSDT', 'SOLUSDT', 'SHIBUSDT']
-threshold = 3.0  # % cambio significativo
+threshold = 3.0
 rsi_period = 14
 
 # 🔐 TELEGRAM
@@ -13,7 +14,18 @@ TOKEN = 'TU_TOKEN_NUEVO_AQUI'
 CHAT_ID = '6232492493'
 bot = Bot(token=TOKEN)
 
-# 📊 Obtener datos históricos de Binance
+# 🌍 FLASK APP PARA RENDER
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Cripto Bot corriendo"
+
+@app.route('/status')
+def status():
+    return f"🕒 Última ejecución: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+# 📊 Binance
 def get_klines(symbol, interval='1m', limit=100):
     try:
         url = f'https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}'
@@ -31,7 +43,6 @@ def get_klines(symbol, interval='1m', limit=100):
         print(f"⚠️ Error al obtener datos de {symbol}: {e}")
         return None
 
-# 📈 Calcular RSI
 def calc_rsi(prices, period=14):
     if len(prices) < period:
         return np.nan
@@ -44,7 +55,6 @@ def calc_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# 🔍 Analizar moneda
 async def analizar(symbol):
     df = get_klines(symbol)
     if df is None or len(df) < rsi_period + 1:
@@ -76,14 +86,18 @@ async def analizar(symbol):
         except Exception as e:
             print(f"⚠️ Error al enviar mensaje de {symbol}: {e}")
 
-# ♻️ Bucle principal async
 async def main():
     while True:
         print(f"⏰ Ejecutando análisis: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         for moneda in symbols:
             await analizar(moneda)
-            await asyncio.sleep(1)  # Evitar rate limit
+            await asyncio.sleep(1)
         await asyncio.sleep(60)
 
-if __name__ == "__main__":
+def start_bot_loop():
     asyncio.run(main())
+
+# 🚀 Iniciar bot + webserver
+if __name__ == '__main__':
+    threading.Thread(target=start_bot_loop).start()
+    app.run(host='0.0.0.0', port=10000)
