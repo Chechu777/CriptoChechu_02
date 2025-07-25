@@ -1,129 +1,70 @@
 import os
-import asyncio
-import time
-import threading
 import requests
-import pandas as pd
-from flask import Flask
+import time
+import datetime
+import pytz
 from telegram import Bot
 
-# --- Configuración desde variables de entorno ---
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:20")
-ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "22:30")
 
-CRYPTO_IDS = ["bitcoin", "cardano", "solana", "shiba-inu"]
-SYMBOL_MAP = {
-    "bitcoin": "BTC",
-    "cardano": "ADA",
-    "solana": "SOL",
-    "shiba-inu": "SHIB"
-}
+MONEDAS = ["bitcoin", "cardano", "solana", "shiba-inu"]
+NOMBRES = {"bitcoin": "BTC", "cardano": "ADA", "solana": "SOL", "shiba-inu": "SHIBA"}
+API_URL = "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=eur"
 
-API_PRECIO = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(CRYPTO_IDS)}&vs_currencies=eur"
-API_HISTORICO = "https://api.coingecko.com/api/v3/coins/{id}/market_chart?vs_currency=eur&days=2&interval=hourly"
-
-if not TOKEN or not CHAT_ID:
-    raise Exception("Faltan variables de entorno TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
+INTERVALO_MINUTOS = 10
+VARIACION_ALERTA = 2.0  # %
 
 bot = Bot(token=TOKEN)
 precios_anteriores = {}
 
-# --- Flask App (para Render) ---
-app = Flask(__name__)
+def obtener_precios():
+    ids = ",".join(MONEDAS)
+    url = API_URL.format(ids)
+    r = requests.get(url)
+    return r.json()
 
-@app.route("/")
-def index():
-    return "✅ Bot Cripto activo y corriendo."
-
-def iniciar_flask():
-    app.run(host="0.0.0.0", port=10000)
-
-# --- Funciones de utilidad ---
-def obtener_precios_actuales():
+def enviar_mensaje(texto):
     try:
-        resp = requests.get(API_PRECIO)
-        resp.raise_for_status()
-        return resp.json()
+        bot.send_message(chat_id=CHAT_ID, text=texto)
     except Exception as e:
-        print("⚠️ Error obteniendo precios:", e)
-        return {}
+        print("Error enviando mensaje:", e)
 
-def calcular_rsi(prices, period=14):
-    df = pd.DataFrame(prices, columns=["price"])
-    delta = df["price"].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else None
+def es_hora_de_resumen():
+    ahora = datetime.datetime.now(pytz.timezone("Europe/Madrid"))  # o Europe/Amsterdam
+    hora_actual = ahora.strftime("%H:%M")
+    return RESUMEN_DIARIO and hora_actual == RESUMEN_HORA
 
-def obtener_rsi(crypto_id):
-    try:
-        url = API_HISTORICO.format(id=crypto_id)
-        resp = requests.get(url)
-        resp.raise_for_status()
-        prices = [x[1] for x in resp.json().get("prices", [])]
-        return calcular_rsi(prices)
-    except Exception as e:
-        print(f"⚠️ Error al calcular RSI de {crypto_id}:", e)
-        return None
+def generar_resumen(precios):
+    ahora = datetime.datetime.now(pytz.timezone("Europe/Madrid")).strftime("%d-%m %H:%M")
+    resumen = f"📊 *Resumen diario* ({ahora}):\n"
+    for k, v in precios.items():
+        simbolo = NOMBRES.get(k, k.upper())
+        resumen += f"- {simbolo}: {v['eur']} €\n"
+    return resumen
 
-def detectar_cambios(precios_actuales):
-    mensajes = []
-    for cripto, data in precios_actuales.items():
-        actual = data["eur"]
-        anterior = precios_anteriores.get(cripto)
-
+def detectar_cambios(precios):
+    for k, v in precios.items():
+        actual = v["eur"]
+        anterior = precios_anteriores.get(k)
         if anterior:
-            cambio = ((actual - anterior) / anterior) * 100
-            if abs(cambio) >= 3:
-                emoji = "📈" if cambio > 0 else "📉"
-                mensajes.append(f"{emoji} *{SYMBOL_MAP[cripto]}*: {actual:.2f} EUR ({cambio:+.2f}%)")
-
-        precios_anteriores[cripto] = actual
-    return mensajes
-
-# --- Tareas Asíncronas ---
-async def monitorear_cambios():
-    while True:
-        precios = obtener_precios_actuales()
-        cambios = detectar_cambios(precios)
-        for mensaje in cambios:
-            await bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
-        await asyncio.sleep(300)
-
-async def enviar_resumen_diario():
-    while True:
-        if not ENVIAR_RESUMEN_DIARIO:
-            await asyncio.sleep(60)
-            continue
-
-        ahora = time.strftime("%H:%M")
-        if ahora == RESUMEN_HORA:
-            precios = obtener_precios_actuales()
-            if precios:
-                resumen = "*📊 Resumen Diario de Criptos:*\n\n"
-                for cripto, data in precios.items():
-                    simbolo = SYMBOL_MAP[cripto]
-                    precio = data["eur"]
-                    rsi = obtener_rsi(cripto)
-                    resumen += f"• *{simbolo}*: {precio:.2f} EUR | RSI: {rsi if rsi is not None else 'N/A'}\n"
-
-                await bot.send_message(chat_id=CHAT_ID, text=resumen, parse_mode="Markdown")
-                await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# --- Lanzar todo ---
-async def main():
-    tareas = [monitorear_cambios()]
-    if ENVIAR_RESUMEN_DIARIO:
-        tareas.append(enviar_resumen_diario())
-    await asyncio.gather(*tareas)
+            variacion = ((actual - anterior) / anterior) * 100
+            if abs(variacion) >= VARIACION_ALERTA:
+                direccion = "⬆️ subió" if variacion > 0 else "⬇️ bajó"
+                mensaje = f"{NOMBRES[k]} {direccion} {variacion:.2f}% → {actual} €"
+                enviar_mensaje(mensaje)
+        precios_anteriores[k] = actual
 
 if __name__ == "__main__":
-    threading.Thread(target=iniciar_flask).start()
-    asyncio.run(main())
+    while True:
+        try:
+            precios = obtener_precios()
+            detectar_cambios(precios)
+            if es_hora_de_resumen():
+                resumen = generar_resumen(precios)
+                enviar_mensaje(resumen)
+        except Exception as e:
+            print("Error en ejecución:", e)
+        time.sleep(INTERVALO_MINUTOS * 60)
