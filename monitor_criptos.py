@@ -14,6 +14,7 @@ import os
 from telegram import Bot
 TOKEN = os.getenv("TOKEN")  # No pongas el token directamente aquí
 bot = Bot(token=TOKEN)
+CHAT_ID = os.getenv("CHAT_ID")
 
 # 🌍 FLASK APP PARA RENDER
 app = Flask(__name__)
