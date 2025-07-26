@@ -10,18 +10,13 @@ app = Flask(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CMC_API_KEY = os.getenv("CMC_API_KEY")
+
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 ZONA_HORARIA = timezone("Europe/Madrid")
 
 CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
-SIMBOLOS_BINANCE = {
-    'BTC': 'BTCEUR',
-    'ETH': 'ETHEUR',
-    'ADA': 'ADAEUR',
-    'SHIB': 'SHIBEUR',
-    'SOL': 'SOLEUR'
-}
 
 PRECIOS_REFERENCIA = {
     'BTC': 37000,
@@ -32,17 +27,21 @@ PRECIOS_REFERENCIA = {
 }
 
 def obtener_precio_eur(cripto):
-    simbolo = SIMBOLOS_BINANCE.get(cripto)
-    if not simbolo:
-        print(f"[ERROR] {cripto} no tiene símbolo Binance definido.")
-        return None
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={simbolo}"
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    params = {
+        "symbol": cripto,
+        "convert": "EUR"
+    }
+    headers = {
+        "X-CMC_PRO_API_KEY": CMC_API_KEY
+    }
     try:
-        response = requests.get(url)
+        response = requests.get(url, params=params, headers=headers)
         response.raise_for_status()
-        return float(response.json()["price"])
+        data = response.json()
+        return float(data["data"][cripto]["quote"]["EUR"]["price"])
     except Exception as e:
-        print(f"[ERROR] No se pudo obtener el precio de {cripto} desde Binance: {e}")
+        print(f"[ERROR] No se pudo obtener el precio de {cripto} desde CoinMarketCap: {e}")
         return None
 
 def calcular_rsi_dummy(cripto):
