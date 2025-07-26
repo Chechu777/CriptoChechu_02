@@ -8,22 +8,21 @@ from pytz import timezone
 
 app = Flask(__name__)
 
-# Configuración desde variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 ZONA_HORARIA = timezone("Europe/Madrid")
 
-# Criptos a seguir y precios de referencia
 CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
-COINGECKO_IDS = {
-    'BTC': 'bitcoin',
-    'ETH': 'ethereum',
-    'ADA': 'cardano',
-    'SHIB': 'shiba-inu',
-    'SOL': 'solana'
+SIMBOLOS_BINANCE = {
+    'BTC': 'BTCEUR',
+    'ETH': 'ETHEUR',
+    'ADA': 'ADAEUR',
+    'SHIB': 'SHIBEUR',
+    'SOL': 'SOLEUR'
 }
+
 PRECIOS_REFERENCIA = {
     'BTC': 37000,
     'ETH': 2100,
@@ -32,19 +31,20 @@ PRECIOS_REFERENCIA = {
     'SOL': 26.5
 }
 
-# Obtener todos los precios de Coingecko en una sola llamada
-def obtener_precios_eur():
-    ids = ','.join(COINGECKO_IDS[c] for c in CRIPTOS)
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=eur"
+def obtener_precio_eur(cripto):
+    simbolo = SIMBOLOS_BINANCE.get(cripto)
+    if not simbolo:
+        print(f"[ERROR] {cripto} no tiene símbolo Binance definido.")
+        return None
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={simbolo}"
     try:
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        return float(response.json()["price"])
     except Exception as e:
-        print(f"[ERROR] No se pudieron obtener precios: {e}")
-        return {}
+        print(f"[ERROR] No se pudo obtener el precio de {cripto} desde Binance: {e}")
+        return None
 
-# RSI ficticio para ejemplo
 def calcular_rsi_dummy(cripto):
     valores_rsi = {
         'BTC': 45,
@@ -61,16 +61,12 @@ def consejo_por_rsi(rsi):
     elif rsi > 70:
         return "⚠️ *TE ACONSEJO QUE VENDAS*, está sobrecomprado."
     else:
-        return "👌 *Mantén la calma*, el mercado está estable."
+        return "👌 Mantén la calma, el mercado está estable."
 
-# Crear resumen
 def obtener_resumen_diario():
-    precios = obtener_precios_eur()
     resumen = "📊 *Resumen diario de criptomonedas* 📊\n\n"
-
-    for cripto in CRIPOS:
-        cripto_id = COINGECKO_IDS[cripto]
-        precio = precios.get(cripto_id, {}).get("eur")
+    for cripto in CRIPTOS:
+        precio = obtener_precio_eur(cripto)
         if precio is None:
             resumen += f"⚠️ {cripto}: Error al obtener precio\n"
             continue
@@ -96,7 +92,6 @@ def obtener_resumen_diario():
     resumen += f"_Actualizado: {hora_actual}_"
     return resumen
 
-# Enviar a Telegram
 def enviar_mensaje(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -111,7 +106,6 @@ def enviar_mensaje(mensaje):
     except Exception as e:
         print(f"[ERROR] Al enviar mensaje: {e}")
 
-# Hilo programado
 def tarea_programada():
     print("[INFO] Hilo de resumen diario iniciado.")
     while True:
@@ -124,7 +118,6 @@ def tarea_programada():
                 time.sleep(60)
         time.sleep(20)
 
-# Rutas web
 @app.route("/")
 def home():
     return "Bot monitor_criptos activo ✅"
@@ -138,6 +131,5 @@ def resumen_manual():
     except Exception as e:
         return f"Error al generar resumen: {e}"
 
-# Lanzar hilo
 if ENVIAR_RESUMEN_DIARIO:
     threading.Thread(target=tarea_programada, daemon=True).start()
