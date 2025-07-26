@@ -62,14 +62,13 @@ def obtener_precio_actual(cripto):
         timestamp = datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')
         
         # Registrar el precio actual
-        price_history[crypto].append({
+        price_history[cripto].append({
             "timestamp": timestamp,
             "price": precio
         })
-        
-        # Mantener solo los datos necesarios para el RSI
-        if len(price_history[crypto]) > RSI_PERIOD * 2:
-            price_history[crypto] = price_history[crypto][-RSI_PERIOD*2:]
+
+        if len(price_history[cripto]) > RSI_PERIOD * 2:
+            price_history[cripto] = price_history[cripto][-RSI_PERIOD*2:]
         
         save_history()
         return precio
