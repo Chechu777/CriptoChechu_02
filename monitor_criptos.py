@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request
+from flask import Flask
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -9,26 +9,31 @@ app = Flask(__name__)
 # Variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-# Criptomonedas a monitorear
-CRIPTOS = ["BTC", "ADA", "SHIBA", "SOL"]
+CRIPTOS = ["BTC", "ETH", "ADA", "SHIBA", "SOL"]
 
-# Crear cliente de Supabase
+# Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def enviar_mensaje(texto):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    requests.post(url, data={
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": texto,
+        "parse_mode": "Markdown"
+    })
 
 def obtener_precios():
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-    headers = {"X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY")}
+    headers = {"X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY}
     params = {"symbol": ",".join(CRIPTOS), "convert": "EUR"}
 
     try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()["data"]
+        res = requests.get(url, headers=headers, params=params)
+        data = res.json()["data"]
         precios = {
             cripto: round(data[cripto]["quote"]["EUR"]["price"], 5)
             for cripto in CRIPTOS
@@ -38,60 +43,37 @@ def obtener_precios():
         enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
         return {}
 
-def guardar_precios_en_supabase(precios):
-    timestamp_actual = datetime.utcnow().isoformat()
-
+def guardar_precios(precios):
+    ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
-        data = {
-            "cripto": cripto,
-            "precio": precio,
-            "timestamp": timestamp_actual
-        }
         try:
-            supabase.table("precios_historicos").insert(data).execute()
+            supabase.table("precios_historicos").insert({
+                "cripto": cripto,
+                "precio": precio,
+                "timestamp": ahora
+            }).execute()
         except Exception as e:
-            enviar_mensaje(f"❌ Error al guardar en Supabase: {e}")
+            enviar_mensaje(f"❌ Error guardando {cripto}: {e}")
 
-def enviar_mensaje(texto):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
-    requests.post(url, data=payload)
-
-@app.route("/ver-precios")
-def ver_precios():
+@app.route("/resumen")
+def resumen_manual():
     precios = obtener_precios()
     if not precios:
-        return "Error al obtener precios."
+        return "Error al obtener precios"
 
-    guardar_precios_en_supabase(precios)
+    guardar_precios(precios)
 
-    mensaje = "💰 *Precios actuales:*\n"
+    mensaje = "📊 *Resumen Manual de Criptomonedas*\n\n"
     for cripto, precio in precios.items():
         mensaje += f"• {cripto}: {precio} €\n"
+
+    mensaje += f"\n⏱️ Actualizado: {datetime.now().strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_mensaje(mensaje)
-    return "Precios enviados."
+    return "Resumen enviado correctamente ✅"
 
-@app.route("/resumen-diario")
-def resumen_diario():
-    if not ENVIAR_RESUMEN_DIARIO:
-        return "Resumen diario desactivado."
-
-    precios = obtener_precios()
-    if not precios:
-        return "Error al obtener precios."
-
-    guardar_precios_en_supabase(precios)
-
-    ahora = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    mensaje = f"📊 *Resumen Diario ({ahora} UTC)*\n"
-    for cripto, precio in precios.items():
-        mensaje += f"• {cripto}: {precio} €\n"
-    enviar_mensaje(mensaje)
-    return "Resumen enviado."
+@app.route("/")
+def home():
+    return "✅ Monitor Criptos Activo"
 
 if __name__ == "__main__":
     app.run(debug=True)
