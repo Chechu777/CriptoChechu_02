@@ -8,18 +8,17 @@ from pytz import timezone
 
 app = Flask(__name__)
 
-# Configuración
+# Configuración desde variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
-
 ZONA_HORARIA = timezone("Europe/Madrid")
 
+# Criptos a seguir y precios de referencia
 CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
 URL_BASE = "https://api.binance.com/api/v3/ticker/price?symbol="
 
-# Precios de referencia para ejemplo (ajusta con valores reales o históricos)
 PRECIOS_REFERENCIA = {
     'BTC': 37000,
     'ETH': 2100,
@@ -28,8 +27,9 @@ PRECIOS_REFERENCIA = {
     'SOL': 26.5
 }
 
+# Obtener precio actual en euros desde Binance
 def obtener_precio_eur(cripto):
-    symbol = (cripto + "eur").upper()
+    symbol = f"{cripto.upper()}EUR"
     try:
         response = requests.get(URL_BASE + symbol)
         response.raise_for_status()
@@ -38,26 +38,27 @@ def obtener_precio_eur(cripto):
         print(f"[ERROR] No se pudo obtener el precio de {cripto}: {e}")
         return None
 
+# RSI ficticio para ejemplo (puedes reemplazar por cálculo real en el futuro)
 def calcular_rsi_dummy(cripto):
-    # Simulación simple: RSI aleatorio para ejemplo (en la práctica calcula real)
-    # Aquí te pongo un valor fijo para que se entienda la lógica
-    rsi_ejemplo = {
+    valores_rsi = {
         'BTC': 45,
         'ETH': 70,
         'ADA': 30,
         'SHIB': 55,
         'SOL': 65
     }
-    return rsi_ejemplo.get(cripto, 50)
+    return valores_rsi.get(cripto, 50)
 
+# Generar mensaje de recomendación según RSI
 def consejo_por_rsi(rsi):
     if rsi < 30:
         return "🔥 *TE ACONSEJO QUE COMPRES*, está sobrevendido."
     elif rsi > 70:
         return "⚠️ *TE ACONSEJO QUE VENDAS*, está sobrecomprado."
     else:
-        return "👌 *Mantén la calma*, mercado estable."
+        return "👌 *Mantén la calma*, el mercado está estable."
 
+# Crear resumen completo
 def obtener_resumen_diario():
     resumen = "📊 *Resumen diario de criptomonedas* 📊\n\n"
     for cripto in CRIPTOS:
@@ -68,19 +69,26 @@ def obtener_resumen_diario():
 
         rsi = calcular_rsi_dummy(cripto)
         consejo = consejo_por_rsi(rsi)
-        
         precio_ref = PRECIOS_REFERENCIA.get(cripto, precio)
-        tendencia = ""
-        if precio < precio_ref * 0.95:
-            tendencia = "📉 Precio ha bajado un 5% respecto al referencia."
-        elif precio > precio_ref * 1.05:
-            tendencia = "📈 Precio ha subido un 5% respecto al referencia."
-        
-        resumen += f"💰 {cripto}: {precio:,.6f} €\nRSI: {rsi}\n{consejo}\n{tendencia}\n\n"
 
-    resumen += f"_Actualizado: {datetime.datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')}_\n"
+        variacion = ""
+        if precio < precio_ref * 0.95:
+            variacion = "📉 Ha bajado más del 5% desde el precio referencia."
+        elif precio > precio_ref * 1.05:
+            variacion = "📈 Ha subido más del 5% desde el precio referencia."
+
+        resumen += (
+            f"💰 *{cripto}*: {precio:,.6f} €\n"
+            f"📈 RSI: {rsi}\n"
+            f"{consejo}\n"
+            f"{variacion}\n\n"
+        )
+
+    hora_actual = datetime.datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')
+    resumen += f"_Actualizado: {hora_actual}_"
     return resumen
 
+# Enviar mensaje a Telegram
 def enviar_mensaje(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -95,6 +103,7 @@ def enviar_mensaje(mensaje):
     except Exception as e:
         print(f"[ERROR] Al enviar mensaje: {e}")
 
+# Tarea en segundo plano para enviar resumen diario automáticamente
 def tarea_programada():
     print("[INFO] Hilo de resumen diario iniciado.")
     while True:
@@ -104,9 +113,10 @@ def tarea_programada():
                 resumen = obtener_resumen_diario()
                 enviar_mensaje(resumen)
                 print(f"[INFO] Resumen enviado a las {ahora}")
-                time.sleep(60)  # evitar duplicados
+                time.sleep(60)
         time.sleep(20)
 
+# Endpoints web
 @app.route("/")
 def home():
     return "Bot monitor_criptos activo ✅"
@@ -120,5 +130,6 @@ def resumen_manual():
     except Exception as e:
         return f"Error al generar resumen: {e}"
 
+# Lanzar tarea si está habilitado
 if ENVIAR_RESUMEN_DIARIO:
     threading.Thread(target=tarea_programada, daemon=True).start()
