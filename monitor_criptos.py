@@ -177,7 +177,7 @@ def obtener_resumen():
     
     return mensaje
 
-# Telegram y Flask (sin cambios)
+# Telegram y Flask
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -190,6 +190,19 @@ def enviar_mensaje(texto):
         print("[INFO] Mensaje enviado")
     except Exception as e:
         print(f"[ERROR] Enviando mensaje: {e}")
+
+# Tarea de monitorización
+def tarea_monitor():
+    print("[INFO] Monitor iniciado")
+    while True:
+        ahora_local = ahora()
+        
+        # Resumen diario automático
+        if ENVIAR_RESUMEN_DIARIO and ahora_local.strftime("%H:%M") == RESUMEN_HORA:
+            enviar_mensaje(obtener_resumen())
+            time.sleep(61)  # Evitar duplicados
+        
+        time.sleep(30)
 
 @app.route("/")
 def home():
@@ -210,3 +223,6 @@ atexit.register(guardar_historico)
 
 if ENVIAR_RESUMEN_DIARIO:
     threading.Thread(target=tarea_monitor, daemon=True).start()
+
+if __name__ == '__main__':
+    app.run()
