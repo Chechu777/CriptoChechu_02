@@ -8,16 +8,16 @@ from pytz import timezone
 
 app = Flask(__name__)
 
+# Variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
-
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 ZONA_HORARIA = timezone("Europe/Madrid")
 
+# Configuración de criptos
 CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
-
 PRECIOS_REFERENCIA = {
     'BTC': 37000,
     'ETH': 2100,
@@ -26,17 +26,19 @@ PRECIOS_REFERENCIA = {
     'SOL': 26.5
 }
 
+# Obtener precios desde CoinMarketCap en EUR
 def obtener_precio_eur(cripto):
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    headers = {
+        "X-CMC_PRO_API_KEY": CMC_API_KEY,
+        "Accepts": "application/json"
+    }
     params = {
         "symbol": cripto,
         "convert": "EUR"
     }
-    headers = {
-        "X-CMC_PRO_API_KEY": CMC_API_KEY
-    }
     try:
-        response = requests.get(url, params=params, headers=headers)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
         return float(data["data"][cripto]["quote"]["EUR"]["price"])
@@ -44,6 +46,7 @@ def obtener_precio_eur(cripto):
         print(f"[ERROR] No se pudo obtener el precio de {cripto} desde CoinMarketCap: {e}")
         return None
 
+# Simulación de RSI
 def calcular_rsi_dummy(cripto):
     valores_rsi = {
         'BTC': 45,
@@ -54,6 +57,7 @@ def calcular_rsi_dummy(cripto):
     }
     return valores_rsi.get(cripto, 50)
 
+# Mensaje según RSI
 def consejo_por_rsi(rsi):
     if rsi < 30:
         return "🔥 *TE ACONSEJO QUE COMPRES*, está sobrevendido."
@@ -62,6 +66,7 @@ def consejo_por_rsi(rsi):
     else:
         return "👌 Mantén la calma, el mercado está estable."
 
+# Generar resumen diario
 def obtener_resumen_diario():
     resumen = "📊 *Resumen diario de criptomonedas* 📊\n\n"
     for cripto in CRIPTOS:
@@ -91,6 +96,7 @@ def obtener_resumen_diario():
     resumen += f"_Actualizado: {hora_actual}_"
     return resumen
 
+# Enviar mensaje a Telegram
 def enviar_mensaje(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -105,6 +111,7 @@ def enviar_mensaje(mensaje):
     except Exception as e:
         print(f"[ERROR] Al enviar mensaje: {e}")
 
+# Tarea programada diaria
 def tarea_programada():
     print("[INFO] Hilo de resumen diario iniciado.")
     while True:
@@ -114,9 +121,10 @@ def tarea_programada():
                 resumen = obtener_resumen_diario()
                 enviar_mensaje(resumen)
                 print(f"[INFO] Resumen enviado a las {ahora}")
-                time.sleep(60)
+                time.sleep(60)  # Espera 60 segundos para evitar repeticiones
         time.sleep(20)
 
+# Rutas Flask
 @app.route("/")
 def home():
     return "Bot monitor_criptos activo ✅"
@@ -130,5 +138,6 @@ def resumen_manual():
     except Exception as e:
         return f"Error al generar resumen: {e}"
 
+# Arranque de tarea programada
 if ENVIAR_RESUMEN_DIARIO:
     threading.Thread(target=tarea_programada, daemon=True).start()
