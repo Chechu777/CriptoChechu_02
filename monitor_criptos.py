@@ -1,52 +1,65 @@
 import os
-from flask import Flask, request
-from datetime import datetime
-import telegram
-import logging
-import threading
 import time
+import threading
+import datetime
+import requests
+from flask import Flask
+from pytz import timezone
 
+# Flask app
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# Configuración
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
-bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+# ZONA HORARIA
+ZONA_HORARIA = timezone("Europe/Madrid")  # Ajusta si usas otra
 
-def obtener_resumen():
-    # Aquí va tu lógica real de precios y RSI
-    resumen = (
-        "📊 *Resumen Diario Criptomonedas*\n\n"
-        "🔹 BTC: $29,000 | RSI: 48\n"
-        "🔹 ADA: $0.29 | RSI: 40\n"
-        "🔹 SOL: $26.50 | RSI: 55\n"
-        "🔹 SHIBA: $0.000007 | RSI: 60\n"
-        "\n_Actualizado: " + datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC') + "_"
-    )
-    return resumen
-
-def enviar_resumen_diario():
-    while True:
-        ahora = datetime.now().strftime("%H:%M")
-        if ENVIAR_RESUMEN_DIARIO and ahora == RESUMEN_HORA:
-            resumen = obtener_resumen()
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=resumen, parse_mode=telegram.ParseMode.MARKDOWN)
-            time.sleep(60)  # Esperar 1 minuto para evitar reenvíos en el mismo minuto
-        time.sleep(20)  # Espera antes de volver a comprobar
-
-@app.route("/resumen", methods=["GET"])
-def generar_resumen_diario():
+# Función para enviar mensaje a Telegram
+def enviar_mensaje(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
     try:
-        # Eliminar la condición de hora para pruebas
+        r = requests.post(url, data=payload)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"Error al enviar mensaje: {e}")
+
+# Función que genera el resumen (puedes personalizar esto)
+def obtener_resumen_diario():
+    return "Resumen diario:\nBTC: 37.000€\nETH: 2.100€\nRSI: 52\n(Esto es un ejemplo)"
+
+# Envío automático a la hora configurada
+def tarea_programada():
+    print("[INFO] Hilo de resumen diario iniciado.")
+    while True:
+        if ENVIAR_RESUMEN_DIARIO:
+            ahora = datetime.datetime.now(ZONA_HORARIA).strftime("%H:%M")
+            if ahora == RESUMEN_HORA:
+                resumen = obtener_resumen_diario()
+                enviar_mensaje(resumen)
+                print(f"[INFO] Resumen enviado a las {ahora}")
+                time.sleep(60)  # Espera 1 minuto para evitar duplicados
+        time.sleep(20)  # Verifica cada 20 segundos
+
+# Endpoint de prueba manual
+@app.route("/resumen")
+def resumen_manual():
+    try:
         resumen = obtener_resumen_diario()
-        enviar_mensaje_telegram(f"Resumen Diario - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 📊\n\n{resumen}")
-        return "Resumen enviado correctamente 📤"
+        enviar_mensaje(f"[PRUEBA MANUAL]\n{resumen}")
+        return "Resumen enviado manualmente"
     except Exception as e:
         return f"Error al generar resumen: {e}"
 
-# Iniciar el hilo del resumen si está activado
+# Arrancar el hilo al iniciar el servidor
 if ENVIAR_RESUMEN_DIARIO:
-    threading.Thread(target=enviar_resumen_diario, daemon=True).start()
+    threading.Thread(target=tarea_programada, daemon=True).start()
+
+# Endpoint base
+@app.route("/")
+def home():
+    return "Bot monitor_criptos activo ✅"
