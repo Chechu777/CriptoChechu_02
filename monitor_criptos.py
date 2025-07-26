@@ -53,11 +53,12 @@ def obtener_precios():
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
-        # Formatear como string
+        # Formatear con 8 decimales como string
+        precio_formateado = f"{precio:.8f}"
         try:
             supabase.table("precios_historicos").insert({
                 "cripto": cripto,
-                "precio": precio,
+                "precio": precio_formateado,
                 "timestamp": ahora
             }).execute()
         except Exception as e:
