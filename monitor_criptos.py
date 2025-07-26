@@ -34,7 +34,13 @@ def obtener_precio_eur(cripto):
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
+
+        if "data" not in data or cripto not in data["data"]:
+            print(f"[ERROR] Respuesta inesperada de CMC para {cripto}: {data}")
+            return None
+
         return float(data["data"][cripto]["quote"]["EUR"]["price"])
+
     except Exception as e:
         print(f"[ERROR] No se pudo obtener el precio de {cripto}: {e}")
         return None
