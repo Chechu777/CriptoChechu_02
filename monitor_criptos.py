@@ -53,6 +53,7 @@ def obtener_precios():
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
+        # Formatear como string
         try:
             supabase.table("precios_historicos").insert({
                 "cripto": cripto,
