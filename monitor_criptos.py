@@ -85,7 +85,14 @@ def resumen_manual():
     for cripto, precio in precios.items():
         rsi = round(random.uniform(20, 80), 1)  # RSI aleatorio por ahora
         consejo = generar_recomendacion(rsi)
-        mensaje += f"*{cripto}*: {precio} €\nRSI: {rsi} → {consejo}\n\n"
+
+        # Mostrar con 8 decimales si es menor a 0.01, sino con 5
+        if precio < 0.01:
+            precio_str = f"{precio:.8f}"
+        else:
+            precio_str = f"{precio:.5f}"
+
+        mensaje += f"*{cripto}*: {precio_str} €\nRSI: {rsi} → {consejo}\n\n"
 
     mensaje += f"⏱️ Actualizado: {datetime.now().strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_mensaje(mensaje)
