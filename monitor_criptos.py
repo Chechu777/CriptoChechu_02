@@ -38,10 +38,14 @@ def enviar_resumen_diario():
         time.sleep(20)  # Espera antes de volver a comprobar
 
 @app.route("/resumen", methods=["GET"])
-def resumen():
-    resumen = obtener_resumen()
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=resumen, parse_mode=telegram.ParseMode.MARKDOWN)
-    return "Resumen enviado correctamente."
+def generar_resumen_diario():
+    try:
+        # Eliminar la condición de hora para pruebas
+        resumen = obtener_resumen_diario()
+        enviar_mensaje_telegram(f"Resumen Diario - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 📊\n\n{resumen}")
+        return "Resumen enviado correctamente 📤"
+    except Exception as e:
+        return f"Error al generar resumen: {e}"
 
 # Iniciar el hilo del resumen si está activado
 if ENVIAR_RESUMEN_DIARIO:
