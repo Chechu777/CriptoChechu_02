@@ -1,106 +1,97 @@
 import os
-import json
 import requests
 from flask import Flask, request
-from datetime import datetime, timedelta
+from datetime import datetime
+from supabase import create_client, Client
 
 app = Flask(__name__)
 
-price_history = {}
-
+# Variables de entorno
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-CRIPTO_LISTA = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
+# Criptomonedas a monitorear
+CRIPTOS = ["BTC", "ADA", "SHIBA", "SOL"]
 
-def enviar_mensaje_telegram(texto):
+# Crear cliente de Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def obtener_precios():
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    headers = {"X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY")}
+    params = {"symbol": ",".join(CRIPTOS), "convert": "EUR"}
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()["data"]
+        precios = {
+            cripto: round(data[cripto]["quote"]["EUR"]["price"], 5)
+            for cripto in CRIPTOS
+        }
+        return precios
+    except Exception as e:
+        enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
+        return {}
+
+def guardar_precios_en_supabase(precios):
+    timestamp_actual = datetime.utcnow().isoformat()
+
+    for cripto, precio in precios.items():
+        data = {
+            "cripto": cripto,
+            "precio": precio,
+            "timestamp": timestamp_actual
+        }
+        try:
+            supabase.table("precios_historicos").insert(data).execute()
+        except Exception as e:
+            enviar_mensaje(f"❌ Error al guardar en Supabase: {e}")
+
+def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": texto,
         "parse_mode": "Markdown"
     }
-    requests.post(url, json=payload)
+    requests.post(url, data=payload)
 
-def obtener_precio_actual(cripto):
-    headers = {
-        "X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY")
-    }
-    params = {
-        "symbol": cripto,
-        "convert": "EUR"
-    }
-    response = requests.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest", headers=headers, params=params)
-    data = response.json()
-    precio = data["data"][cripto]["quote"]["EUR"]["price"]
-    
-    # Guardar en historial
-    timestamp = datetime.utcnow().isoformat()
-    if cripto not in price_history:
-        price_history[cripto] = []
-    price_history[cripto].append({
-        "timestamp": timestamp,
-        "price": precio
-    })
-    # Limpiar histórico mayor a 2 horas
-    price_history[cripto] = [
-        p for p in price_history[cripto]
-        if datetime.fromisoformat(p["timestamp"]) > datetime.utcnow() - timedelta(hours=2)
-    ]
-    
-    return precio
+@app.route("/ver-precios")
+def ver_precios():
+    precios = obtener_precios()
+    if not precios:
+        return "Error al obtener precios."
 
-def obtener_precio_hace_una_hora(cripto):
-    if cripto not in price_history:
-        return None
-    hace_una_hora = datetime.utcnow() - timedelta(hours=1)
-    posibles = [
-        p["price"] for p in price_history[cripto]
-        if datetime.fromisoformat(p["timestamp"]) <= hace_una_hora
-    ]
-    return posibles[-1] if posibles else None
+    guardar_precios_en_supabase(precios)
 
-def analizar_y_sugerir(cripto, precio_actual):
-    precio_hora_pasada = obtener_precio_hace_una_hora(cripto)
-    if not precio_hora_pasada:
-        return f"{cripto}: Precio actual €{precio_actual:.4f} (esperando histórico para sugerencias)"
+    mensaje = "💰 *Precios actuales:*\n"
+    for cripto, precio in precios.items():
+        mensaje += f"• {cripto}: {precio} €\n"
+    enviar_mensaje(mensaje)
+    return "Precios enviados."
 
-    diferencia = ((precio_actual - precio_hora_pasada) / precio_hora_pasada) * 100
-
-    if diferencia > 5:
-        consejo = "📈 *TE ACONSEJO QUE VENDAS*"
-    elif diferencia < -5:
-        consejo = "📉 *TE ACONSEJO QUE COMPRES*"
-    else:
-        consejo = "🤔 *ESPERA, sin cambios fuertes*"
-
-    return f"{cripto}: €{precio_actual:.4f} | Hace 1h: €{precio_hora_pasada:.4f} ({diferencia:+.2f}%)\n{consejo}"
-
-@app.route("/resumen", methods=["GET"])
+@app.route("/resumen-diario")
 def resumen_diario():
-    ahora = datetime.utcnow().strftime("%H:%M")
-    es_hora_resumen = ahora == RESUMEN_HORA
+    if not ENVIAR_RESUMEN_DIARIO:
+        return "Resumen diario desactivado."
 
-    resumen = []
-    for cripto in CRIPTO_LISTA:
-        try:
-            precio_actual = obtener_precio_actual(cripto)
-            resultado = analizar_y_sugerir(cripto, precio_actual)
-            resumen.append(resultado)
-        except Exception as e:
-            resumen.append(f"{cripto}: Error al obtener precio ({e})")
+    precios = obtener_precios()
+    if not precios:
+        return "Error al obtener precios."
 
-    mensaje = f"📊 *Resumen cripto {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC*\n\n" + "\n\n".join(resumen)
+    guardar_precios_en_supabase(precios)
 
-    # Enviar siempre al acceder
-    enviar_mensaje_telegram(mensaje)
-
-    if es_hora_resumen and ENVIAR_RESUMEN_DIARIO:
-        return "✅ Resumen enviado a Telegram por hora configurada ⏰"
-    else:
-        return f"⏰ Resumen enviado manualmente (actual: {ahora} ≠ {RESUMEN_HORA})"
+    ahora = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    mensaje = f"📊 *Resumen Diario ({ahora} UTC)*\n"
+    for cripto, precio in precios.items():
+        mensaje += f"• {cripto}: {precio} €\n"
+    enviar_mensaje(mensaje)
+    return "Resumen enviado."
 
 if __name__ == "__main__":
     app.run(debug=True)
