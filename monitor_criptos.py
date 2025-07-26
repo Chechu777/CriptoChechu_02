@@ -47,7 +47,8 @@ def obtener_precios():
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
-        precio_formateado = f"{precio:,.12f}"
+        # Guardar sin coma, 12 decimales para los bajos
+        precio_formateado = f"{precio:.12f}"  # sin coma aquí
         try:
             supabase.table("precios_historicos").insert({
                 "cripto": cripto,
@@ -79,9 +80,9 @@ def resumen_manual():
         consejo = generar_recomendacion(rsi)
 
         if precio < 0.01:
-            precio_str = f"{precio:,.12f}"
+            precio_str = f"{precio:,.12f}"  # con coma para miles
         else:
-            precio_str = f"{precio:,.5f}"
+            precio_str = f"{precio:,.5f}"   # con coma para miles
 
         mensaje += f"*{cripto}*: {precio_str} €\nRSI: {rsi} → {consejo}\n\n"
 
