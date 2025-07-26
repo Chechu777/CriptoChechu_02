@@ -1,97 +1,122 @@
-import os
-import requests
-from datetime import datetime
 from flask import Flask
+import requests
+import os
+import datetime
+import schedule
+import time
+import threading
 
 app = Flask(__name__)
 
-# Variables de entorno necesarias
-CMC_API_KEY = os.getenv("CMC_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower()
+CMC_API_KEY = os.getenv("CMC_API_KEY")
+ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
-CRIPTOS = ["BTC", "SHIBA-INU", "ADA", "SOL"]
+CRIPTO_IDS = {
+    "bitcoin": "BTC",
+    "solana": "SOL",
+    "cardano": "ADA",
+    "shiba-inu": "SHIBA"
+}
 
 def obtener_datos_criptos():
-    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-    parametros = {
-        "symbol": ",".join([c.replace("SHIBA-INU", "SHIB") for c in CRIPTOS]),
+    params = {
+        "symbol": ",".join(CRIPTO_IDS.values()),
         "convert": "EUR"
     }
-    respuesta = requests.get(url, headers=headers, params=parametros)
-    datos = respuesta.json()["data"]
-    resultados = {}
+    url_precio = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    url_rsi = "https://api.taapi.io/rsi"
 
-    for cripto in CRIPTOS:
-        simbolo = cripto.replace("SHIBA-INU", "SHIB")
-        precio = datos[simbolo]["quote"]["EUR"]["price"]
-        rsi = calcular_rsi_simulado(precio)
-        resultados[cripto] = {
+    respuesta_precio = requests.get(url_precio, headers=headers, params=params)
+    datos_precio = respuesta_precio.json()
+
+    datos = {}
+    for nombre, simbolo in CRIPTO_IDS.items():
+        info = datos_precio["data"][simbolo]
+        precio = info["quote"]["EUR"]["price"]
+
+        rsi_respuesta = requests.get(url_rsi, params={
+            "secret": os.getenv("TAAPI_KEY"),
+            "exchange": "binance",
+            "symbol": f"{simbolo}/USDT",
+            "interval": "1h"
+        })
+
+        rsi_valor = rsi_respuesta.json().get("value", None)
+
+        datos[nombre] = {
+            "simbolo": simbolo,
             "precio": precio,
-            "rsi": rsi
+            "rsi": rsi_valor
         }
 
-    return resultados
-
-def calcular_rsi_simulado(precio):
-    # Simulación aleatoria de RSI solo para ejemplo
-    import random
-    return round(random.uniform(20, 80), 1)
-
-def interpretar_rsi(rsi):
-    if rsi < 30:
-        return "💸 (RSI bajo)", "Te aconsejo que compres"
-    elif rsi > 70:
-        return "📈 (RSI alto)", "Te aconsejo que vendas"
-    else:
-        return "😐 (RSI normal)", "Te aconsejo que te estés quieto por ahora"
-
-def formatear_precio(precio):
-    if precio >= 1:
-        return f"{precio:,.2f}€"
-    elif precio >= 0.01:
-        return f"{precio:,.4f}€"
-    else:
-        return f"{precio:,.8f}€"
+    return datos
 
 def crear_mensaje(datos):
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
-    mensaje = f"📊 *Resumen Diario de Criptos* ({ahora})\n\n"
+    mensaje = "📊 *Resumen de criptomonedas:*\n\n"
+    for nombre, info in datos.items():
+        precio = info["precio"]
+        rsi = info["rsi"]
+        consejo = ""
+        if rsi is not None:
+            if rsi < 30:
+                consejo = "💸 (RSI bajo)\n*Te aconsejo que compres* 🟢"
+            elif rsi > 70:
+                consejo = "📈 (RSI alto)\n*Te aconsejo que vendas* 🔴"
+            else:
+                consejo = "📉 (RSI medio)\n*Te aconsejo que te estés quieto por ahora* 🟡"
+        else:
+            consejo = "RSI no disponible"
 
-    for cripto, info in datos.items():
-        precio = formatear_precio(info['precio'])
-        rsi = info['rsi']
-        estado, consejo = interpretar_rsi(rsi)
-        mensaje += f"*{cripto}*: {precio}\nRSI: {rsi} → {estado}\n_{consejo}_\n\n"
+        mensaje += (
+            f"*{nombre.upper()}*:\n"
+            f"Precio: `{precio:.8f}` €\n"
+            f"RSI: `{rsi:.1f}` → {consejo}\n\n"
+        )
 
     return mensaje
 
-def enviar_telegram(texto):
+def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": texto,
+        "text": mensaje,
         "parse_mode": "Markdown"
     }
     requests.post(url, data=payload)
 
-@app.route('/resumen')
-def resumen_diario():
-    ahora = datetime.now().strftime("%H:%M")
-    if ENVIAR_RESUMEN_DIARIO == "true" and ahora == RESUMEN_HORA:
-        datos = obtener_datos_criptos()
-        mensaje = crear_mensaje(datos)
-        enviar_telegram(mensaje)
-        return "Resumen diario enviado ✅"
-    else:
+@app.route("/")
+def home():
+    return "🟢 Bot monitor_criptos activo"
+
+@app.route("/resumen")
+def resumen():
+    ahora = datetime.datetime.now().strftime("%H:%M")
+    if ahora != RESUMEN_HORA:
         return f"No es la hora del resumen ({ahora} ≠ {RESUMEN_HORA}) ⏰"
+    datos = obtener_datos_criptos()
+    mensaje = crear_mensaje(datos)
+    enviar_telegram(mensaje)
+    return "Resumen diario enviado ✅"
 
-@app.route('/')
-def inicio():
-    return "Bot de criptos funcionando ✅"
+@app.route("/resumen_manual")
+def resumen_manual():
+    datos = obtener_datos_criptos()
+    mensaje = crear_mensaje(datos)
+    enviar_telegram(mensaje)
+    return "Resumen manual enviado ✅"
 
-if __name__ == '__main__':
-    app.run()
+def tarea_programada():
+    if ENVIAR_RESUMEN_DIARIO:
+        schedule.every().day.at(RESUMEN_HORA).do(lambda: enviar_telegram(
+            crear_mensaje(obtener_datos_criptos())))
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+
+if __name__ == "__main__":
+    threading.Thread(target=tarea_programada).start()
+    app.run(host="0.0.0.0", port=10000)
