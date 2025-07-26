@@ -112,16 +112,26 @@ def enviar_mensaje(mensaje):
         print(f"[ERROR] Al enviar mensaje: {e}")
 
 # Tarea programada diaria
+# En monitor_criptos.py, modificar la función tarea_programada:
 def tarea_programada():
     print("[INFO] Hilo de resumen diario iniciado.")
+    ultimo_envio = None
     while True:
         if ENVIAR_RESUMEN_DIARIO:
-            ahora = datetime.datetime.now(ZONA_HORARIA).strftime("%H:%M")
-            if ahora == RESUMEN_HORA:
-                resumen = obtener_resumen_diario()
-                enviar_mensaje(resumen)
-                print(f"[INFO] Resumen enviado a las {ahora}")
-                time.sleep(60)  # Espera 60 segundos para evitar repeticiones
+            ahora = datetime.datetime.now(ZONA_HORARIA)
+            hora_actual = ahora.strftime("%H:%M")
+            fecha_actual = ahora.date()
+            
+            if hora_actual == RESUMEN_HORA and (ultimo_envio is None or ultimo_envio != fecha_actual):
+                try:
+                    resumen = obtener_resumen_diario()
+                    enviar_mensaje(resumen)
+                    ultimo_envio = fecha_actual
+                    print(f"[INFO] Resumen enviado a las {hora_actual}")
+                except Exception as e:
+                    print(f"[ERROR] Al enviar resumen diario: {e}")
+                
+                time.sleep(60)  # Espera para evitar repeticiones
         time.sleep(20)
 
 # Rutas Flask
