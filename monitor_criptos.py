@@ -9,12 +9,12 @@ import time
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 def obtener_resumen():
     # Aquí va tu lógica real de precios y RSI
