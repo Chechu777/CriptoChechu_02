@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request
+from flask import Flask
 from datetime import datetime
 import pytz
 
@@ -8,60 +8,106 @@ app = Flask(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-ENVIAR_RESUMEN_DIARIO = os.environ.get("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-RESUMEN_HORA = os.environ.get("RESUMEN_HORA", "09:30")
-API_KEY = os.environ.get("COINMARKETCAP_API_KEY")
+CMC_API_KEY = os.environ.get("CMC_API_KEY")
+ZONA_HORARIA = pytz.timezone("Europe/Madrid")
 
-cryptos = ["ADA", "SHIBA", "SOL", "BTC"]
+CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
+PRECIOS_REFERENCIA = {
+    'BTC': 37000,
+    'ETH': 2100,
+    'ADA': 0.30,
+    'SHIB': 0.0000075,
+    'SOL': 26.5
+}
 
-def obtener_datos_crypto(nombre):
-    url = f"https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-    params = {"symbol": nombre, "convert": "EUR"}
-    headers = {"X-CMC_PRO_API_KEY": API_KEY}
-    r = requests.get(url, params=params, headers=headers)
-    data = r.json()["data"][nombre]["quote"]["EUR"]
-    return round(data["price"], 8), round(data["rsi"] if "rsi" in data else 50.0, 1)
+def obtener_precio_eur(cripto):
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    headers = {
+        "X-CMC_PRO_API_KEY": CMC_API_KEY,
+        "Accepts": "application/json"
+    }
+    params = {
+        "symbol": cripto,
+        "convert": "EUR"
+    }
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return float(data["data"][cripto]["quote"]["EUR"]["price"])
+    except Exception as e:
+        print(f"[ERROR] No se pudo obtener el precio de {cripto}: {e}")
+        return None
 
-def emoji_rsi(rsi):
+def calcular_rsi_dummy(cripto):
+    valores_rsi = {
+        'BTC': 45,
+        'ETH': 70,
+        'ADA': 30,
+        'SHIB': 28,
+        'SOL': 65
+    }
+    return valores_rsi.get(cripto, 50)
+
+def consejo_por_rsi(rsi):
     if rsi < 30:
-        return "💸 (RSI bajo)"
+        return "💸 RSI: *Bajo*\n📢 _Te aconsejo que compres_ 🛒"
     elif rsi > 70:
-        return "🤑 (RSI alto)"
+        return "🤑 RSI: *Alto*\n⚠️ _Te aconsejo que vendas_ 📤"
     else:
-        return "😐 (RSI neutro)"
+        return "😐 RSI: *Neutro*\n🤓 _Te aconsejo que te estés quieto por ahora_"
 
-def consejo_rsi(rsi):
-    if rsi < 30:
-        return "Te aconsejo que compres 📈"
-    elif rsi > 70:
-        return "Te aconsejo que vendas 📉"
-    else:
-        return "Te aconsejo que te estés quieto por ahora 🤓"
+def obtener_resumen_diario():
+    resumen = "📊 *Resumen de criptomonedas* 📊\n\n"
+    for cripto in CRIPTOS:
+        precio = obtener_precio_eur(cripto)
+        if precio is None:
+            resumen += f"⚠️ *{cripto}*: Error al obtener precio\n\n"
+            continue
 
-def enviar_mensaje_telegram(mensaje):
+        rsi = calcular_rsi_dummy(cripto)
+        consejo = consejo_por_rsi(rsi)
+        precio_ref = PRECIOS_REFERENCIA.get(cripto, precio)
+
+        variacion = ""
+        if precio < precio_ref * 0.95:
+            variacion = "📉 Ha bajado más del 5% desde el precio referencia."
+        elif precio > precio_ref * 1.05:
+            variacion = "📈 Ha subido más del 5% desde el precio referencia."
+
+        resumen += (
+            f"*{cripto}*: {precio:,.8f} €\n"
+            f"{consejo}\n"
+            f"{variacion}\n\n"
+        )
+
+    hora_actual = datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')
+    resumen += f"_Actualizado: {hora_actual}_"
+    return resumen
+
+def enviar_mensaje(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": mensaje,
         "parse_mode": "Markdown"
     }
-    requests.post(url, data=payload)
+    try:
+        r = requests.post(url, data=payload)
+        r.raise_for_status()
+        print("[INFO] Mensaje enviado correctamente")
+    except Exception as e:
+        print(f"[ERROR] Al enviar mensaje: {e}")
 
-@app.route("/resumen", methods=["GET"])
-def resumen():
-    now = datetime.now(pytz.timezone("Europe/Madrid"))
-    mensaje = f"🕒 *Resumen diario - {now.strftime('%Y-%m-%d %H:%M')}*\n\n"
+@app.route("/")
+def home():
+    return "Bot monitor_criptos activo ✅"
 
-    for cripto in cryptos:
-        precio, rsi = obtener_datos_crypto(cripto)
-        mensaje += (
-            f"*{cripto}*: {precio:.8f}€\n"
-            f"RSI: {rsi} → {emoji_rsi(rsi)}\n"
-            f"{consejo_rsi(rsi)}\n\n"
-        )
-
-    enviar_mensaje_telegram(mensaje)
-    return "✅ Resumen enviado manualmente a Telegram"
-
-if __name__ == "__main__":
-    app.run(debug=True)
+@app.route("/resumen")
+def resumen_manual():
+    try:
+        resumen = obtener_resumen_diario()
+        enviar_mensaje(resumen)
+        return "✅ Resumen enviado a Telegram manualmente"
+    except Exception as e:
+        return f"❌ Error al generar resumen: {e}"
