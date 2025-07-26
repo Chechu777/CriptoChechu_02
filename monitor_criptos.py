@@ -29,13 +29,27 @@ PRECIOS_REFERENCIA = {
 
 # Obtener precio actual en euros desde Binance
 def obtener_precio_eur(cripto):
-    symbol = f"{cripto.upper()}EUR"
+    ids_coingecko = {
+        'BTC': 'bitcoin',
+        'ETH': 'ethereum',
+        'ADA': 'cardano',
+        'SHIB': 'shiba-inu',
+        'SOL': 'solana'
+    }
+
+    cripto_id = ids_coingecko.get(cripto)
+    if not cripto_id:
+        print(f"[ERROR] {cripto} no tiene ID definido en Coingecko.")
+        return None
+
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={cripto_id}&vs_currencies=eur"
+
     try:
-        response = requests.get(URL_BASE + symbol)
+        response = requests.get(url)
         response.raise_for_status()
-        return float(response.json()["price"])
+        return response.json()[cripto_id]["eur"]
     except Exception as e:
-        print(f"[ERROR] No se pudo obtener el precio de {cripto}: {e}")
+        print(f"[ERROR] No se pudo obtener el precio de {cripto} desde Coingecko: {e}")
         return None
 
 # RSI ficticio para ejemplo (puedes reemplazar por cálculo real en el futuro)
