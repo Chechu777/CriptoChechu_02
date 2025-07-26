@@ -36,14 +36,14 @@ def obtener_precios():
 
     try:
         res = requests.get(url, headers=headers, params=params)
-        json_data = res.json()
-        print("DEBUG JSON:", json_data)  # 👈 Agrega esta línea
-        data = json_data["data"]
-
-        precios = {
-            cripto: round(data[cripto]["quote"]["EUR"]["price"], 8 if cripto == "SHIBA" else 5)
-            for cripto in CRIPTOS
-        }
+        data = res.json()["data"]
+        precios = {}
+        for cripto in CRIPTOS:
+            precio = data[cripto]["quote"]["EUR"]["price"]
+            if precio < 0.01:
+                precios[cripto] = float(f"{precio:.8f}")  # 8 decimales para precios muy bajos
+            else:
+                precios[cripto] = float(f"{precio:.5f}")  # 5 decimales para precios normales
         return precios
     except Exception as e:
         enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
