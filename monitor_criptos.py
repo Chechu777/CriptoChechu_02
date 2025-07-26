@@ -6,7 +6,6 @@ import requests
 from flask import Flask
 from pytz import timezone
 
-# Flask app
 app = Flask(__name__)
 
 # Configuración
@@ -15,39 +14,70 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
-# ZONA HORARIA
 ZONA_HORARIA = timezone("Europe/Madrid")
 
-# Lista de criptos a monitorear
 CRIPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
-
-# URL base de Binance para precios
 URL_BASE = "https://api.binance.com/api/v3/ticker/price?symbol="
 
+# Precios de referencia para ejemplo (ajusta con valores reales o históricos)
+PRECIOS_REFERENCIA = {
+    'BTC': 37000,
+    'ETH': 2100,
+    'ADA': 0.30,
+    'SHIB': 0.0000075,
+    'SOL': 26.5
+}
+
 def obtener_precio_eur(cripto):
-    symbol = cripto + "EUR"  # Ejemplo: BTCEUR
+    symbol = cripto + "EUR"
     try:
         response = requests.get(URL_BASE + symbol)
         response.raise_for_status()
-        precio = float(response.json()["price"])
-        return precio
+        return float(response.json()["price"])
     except Exception as e:
-        return f"Error: {e}"
+        return None
 
-def calcular_rsi_dummy():
-    # RSI de ejemplo fijo, para que lo ajustes luego con tu lógica
-    return 52
+def calcular_rsi_dummy(cripto):
+    # Simulación simple: RSI aleatorio para ejemplo (en la práctica calcula real)
+    # Aquí te pongo un valor fijo para que se entienda la lógica
+    rsi_ejemplo = {
+        'BTC': 45,
+        'ETH': 70,
+        'ADA': 30,
+        'SHIB': 55,
+        'SOL': 65
+    }
+    return rsi_ejemplo.get(cripto, 50)
+
+def consejo_por_rsi(rsi):
+    if rsi < 30:
+        return "🔥 *TE ACONSEJO QUE COMPRES*, está sobrevendido."
+    elif rsi > 70:
+        return "⚠️ *TE ACONSEJO QUE VENDAS*, está sobrecomprado."
+    else:
+        return "👌 *Mantén la calma*, mercado estable."
 
 def obtener_resumen_diario():
     resumen = "📊 *Resumen diario de criptomonedas* 📊\n\n"
     for cripto in CRIPTOS:
         precio = obtener_precio_eur(cripto)
-        if isinstance(precio, float):
-            resumen += f"💰 {cripto}: {precio:,.2f} €\n"
-        else:
-            resumen += f"⚠️ {cripto}: {precio}\n"
-    resumen += f"\nRSI promedio: {calcular_rsi_dummy()}\n"
-    resumen += f"\n_Actualizado: {datetime.datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')}_\n"
+        if precio is None:
+            resumen += f"⚠️ {cripto}: Error al obtener precio\n"
+            continue
+
+        rsi = calcular_rsi_dummy(cripto)
+        consejo = consejo_por_rsi(rsi)
+        
+        precio_ref = PRECIOS_REFERENCIA.get(cripto, precio)
+        tendencia = ""
+        if precio < precio_ref * 0.95:
+            tendencia = "📉 Precio ha bajado un 5% respecto al referencia."
+        elif precio > precio_ref * 1.05:
+            tendencia = "📈 Precio ha subido un 5% respecto al referencia."
+        
+        resumen += f"💰 {cripto}: {precio:,.6f} €\nRSI: {rsi}\n{consejo}\n{tendencia}\n\n"
+
+    resumen += f"_Actualizado: {datetime.datetime.now(ZONA_HORARIA).strftime('%Y-%m-%d %H:%M:%S')}_\n"
     return resumen
 
 def enviar_mensaje(mensaje):
@@ -73,7 +103,7 @@ def tarea_programada():
                 resumen = obtener_resumen_diario()
                 enviar_mensaje(resumen)
                 print(f"[INFO] Resumen enviado a las {ahora}")
-                time.sleep(60)  # evitar duplicados en el mismo minuto
+                time.sleep(60)  # evitar duplicados
         time.sleep(20)
 
 @app.route("/")
