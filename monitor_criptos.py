@@ -41,7 +41,7 @@ def obtener_precios():
         for cripto in CRIPTOS:
             precio = data[cripto]["quote"]["EUR"]["price"]
             if precio < 0.01:
-                precios[cripto] = float(f"{precio:.8f}")  # 8 decimales para precios muy bajos
+                precios[cripto] = float(f"{precio:.12f}")  # 8 decimales para precios muy bajos
             else:
                 precios[cripto] = float(f"{precio:.5f}")  # 5 decimales para precios normales
         return precios
@@ -54,7 +54,7 @@ def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
         # Formatear con 8 decimales como string
-        precio_formateado = f"{precio:.8f}"
+        precio_formateado = f"{precio:.12f}"
         try:
             supabase.table("precios_historicos").insert({
                 "cripto": cripto,
@@ -88,7 +88,7 @@ def resumen_manual():
 
         # Mostrar con 8 decimales si es menor a 0.01, sino con 5
         if precio < 0.01:
-            precio_str = f"{precio:.8f}"
+            precio_str = f"{precio:.12f}"
         else:
             precio_str = f"{precio:.5f}"
 
