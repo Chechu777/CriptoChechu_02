@@ -36,7 +36,10 @@ def obtener_precios():
 
     try:
         res = requests.get(url, headers=headers, params=params)
-        data = res.json()["data"]
+        json_data = res.json()
+        print("DEBUG JSON:", json_data)  # 👈 Agrega esta línea
+        data = json_data["data"]
+
         precios = {
             cripto: round(data[cripto]["quote"]["EUR"]["price"], 8 if cripto == "SHIBA" else 5)
             for cripto in CRIPTOS
