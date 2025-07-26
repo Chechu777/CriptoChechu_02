@@ -29,12 +29,13 @@ PRECIOS_REFERENCIA = {
 }
 
 def obtener_precio_eur(cripto):
-    symbol = cripto + "EUR"
+    symbol = (cripto + "eur").upper()
     try:
         response = requests.get(URL_BASE + symbol)
         response.raise_for_status()
         return float(response.json()["price"])
     except Exception as e:
+        print(f"[ERROR] No se pudo obtener el precio de {cripto}: {e}")
         return None
 
 def calcular_rsi_dummy(cripto):
