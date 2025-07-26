@@ -10,7 +10,7 @@ from pytz import timezone
 app = Flask(__name__)
 
 # Configuración
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
 RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
@@ -20,7 +20,7 @@ ZONA_HORARIA = timezone("Europe/Madrid")  # Ajusta si usas otra
 
 # Función para enviar mensaje a Telegram
 def enviar_mensaje(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
     try:
         r = requests.post(url, data=payload)
