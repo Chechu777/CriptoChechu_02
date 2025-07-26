@@ -14,12 +14,11 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-CRIPTOS = ["BTC", "ETH", "ADA", "SHIBA", "SOL"]
+CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]  # ← CORREGIDO
 
 # Inicializar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Enviar mensaje a Telegram
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, data={
@@ -28,7 +27,6 @@ def enviar_mensaje(texto):
         "parse_mode": "Markdown"
     })
 
-# Obtener precios desde CoinMarketCap
 def obtener_precios():
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     headers = {"X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY}
@@ -40,20 +38,15 @@ def obtener_precios():
         precios = {}
         for cripto in CRIPTOS:
             precio = data[cripto]["quote"]["EUR"]["price"]
-            if precio < 0.01:
-                precios[cripto] = float(f"{precio:.12f}")  # 8 decimales para precios muy bajos
-            else:
-                precios[cripto] = float(f"{precio:.5f}")  # 5 decimales para precios normales
+            precios[cripto] = precio  # deja el valor tal cual, sin formatear aún
         return precios
     except Exception as e:
         enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
         return {}
 
-# Guardar en Supabase
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
-        # Formatear con 8 decimales como string
         precio_formateado = f"{precio:.12f}"
         try:
             supabase.table("precios_historicos").insert({
@@ -64,7 +57,6 @@ def guardar_precios(precios):
         except Exception as e:
             enviar_mensaje(f"❌ Error guardando {cripto}: {e}")
 
-# Generar recomendación simple (según RSI falso por ahora)
 def generar_recomendacion(rsi):
     if rsi < 30:
         return "Te aconsejo que *compres* 🟢 (RSI bajo)"
@@ -83,10 +75,9 @@ def resumen_manual():
 
     mensaje = "📊 *Resumen Manual de Criptomonedas*\n\n"
     for cripto, precio in precios.items():
-        rsi = round(random.uniform(20, 80), 1)  # RSI aleatorio por ahora
+        rsi = round(random.uniform(20, 80), 1)
         consejo = generar_recomendacion(rsi)
 
-        # Mostrar con 8 decimales si es menor a 0.01, sino con 5
         if precio < 0.01:
             precio_str = f"{precio:.12f}"
         else:
