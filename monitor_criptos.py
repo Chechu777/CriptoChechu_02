@@ -1,5 +1,6 @@
 import os
 import requests
+import random
 from flask import Flask
 from datetime import datetime
 from supabase import create_client, Client
@@ -15,9 +16,10 @@ COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
 CRIPTOS = ["BTC", "ETH", "ADA", "SHIBA", "SOL"]
 
-# Supabase client
+# Inicializar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Enviar mensaje a Telegram
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, data={
@@ -26,6 +28,7 @@ def enviar_mensaje(texto):
         "parse_mode": "Markdown"
     })
 
+# Obtener precios desde CoinMarketCap
 def obtener_precios():
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     headers = {"X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY}
@@ -35,7 +38,7 @@ def obtener_precios():
         res = requests.get(url, headers=headers, params=params)
         data = res.json()["data"]
         precios = {
-            cripto: round(data[cripto]["quote"]["EUR"]["price"], 5)
+            cripto: round(data[cripto]["quote"]["EUR"]["price"], 8 if cripto == "SHIBA" else 5)
             for cripto in CRIPTOS
         }
         return precios
@@ -43,6 +46,7 @@ def obtener_precios():
         enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
         return {}
 
+# Guardar en Supabase
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
@@ -55,6 +59,15 @@ def guardar_precios(precios):
         except Exception as e:
             enviar_mensaje(f"❌ Error guardando {cripto}: {e}")
 
+# Generar recomendación simple (según RSI falso por ahora)
+def generar_recomendacion(rsi):
+    if rsi < 30:
+        return "Te aconsejo que *compres* 🟢 (RSI bajo)"
+    elif rsi > 70:
+        return "Te aconsejo que *vendas* 🔴 (RSI alto)"
+    else:
+        return "Te aconsejo que te estés *quieto por ahora* 🟡 (RSI neutro)"
+
 @app.route("/resumen")
 def resumen_manual():
     precios = obtener_precios()
@@ -65,10 +78,13 @@ def resumen_manual():
 
     mensaje = "📊 *Resumen Manual de Criptomonedas*\n\n"
     for cripto, precio in precios.items():
-        mensaje += f"• {cripto}: {precio} €\n"
+        rsi = round(random.uniform(20, 80), 1)  # RSI aleatorio por ahora
+        consejo = generar_recomendacion(rsi)
+        mensaje += f"*{cripto}*: {precio} €\nRSI: {rsi} → {consejo}\n\n"
 
-    mensaje += f"\n⏱️ Actualizado: {datetime.now().strftime('%d/%m %H:%M')} (Hora Europa)"
+    mensaje += f"⏱️ Actualizado: {datetime.now().strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_mensaje(mensaje)
+
     return "Resumen enviado correctamente ✅"
 
 @app.route("/")
