@@ -53,29 +53,37 @@ def calcular_rsi_dummy(precio):
     from random import randint
     return randint(10, 90)
 
-
 def generar_mensaje_resumen(data):
     mensaje = "📰 *Resumen diario de criptos* 📊\n\n"
     for moneda in data:
         nombre = moneda["nombre"]
         precio = moneda["precio"]
         rsi = moneda["rsi"]
-        consejo = ""
 
         if rsi is not None:
             if rsi < 30:
-                consejo = "💸 *Te aconsejo que compres* (RSI bajo)"
+                icono = "💸"
+                nivel = "RSI bajo"
+                consejo = "Te aconsejo que compres"
             elif rsi > 70:
-                consejo = "📈 *Te aconsejo que vendas* (RSI alto)"
+                icono = "📈"
+                nivel = "RSI alto"
+                consejo = "Te aconsejo que vendas"
             else:
-                consejo = "🧘 *Te aconsejo que te estés quieto por ahora* (RSI estable)"
-            mensaje += f"*{nombre}*: {precio:.2f}€ | RSI: {rsi:.1f} → {consejo}\n"
+                icono = "🧘"
+                nivel = "RSI estable"
+                consejo = "Te aconsejo que te estés quieto por ahora"
+
+            mensaje += (
+                f"*{nombre}*: {precio:.2f}€\n"
+                f"RSI: {rsi:.1f} → {icono} ({nivel})\n"
+                f"{consejo} \n\n"
+            )
         else:
-            mensaje += f"*{nombre}*: {precio:.2f}€ | RSI: No disponible 😕\n"
+            mensaje += f"*{nombre}*: {precio:.2f}€\nRSI: No disponible 😕\n\n"
 
-    mensaje += "\n🤖 Este mensaje es generado automáticamente cada día. ¡Bendiciones!"
+    mensaje += "🤖 Este mensaje es generado automáticamente cada día. ¡Bendiciones!"
     return mensaje
-
 
 def enviar_mensaje_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
