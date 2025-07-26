@@ -5,11 +5,11 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn monitor_criptos:app"
     envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # Este token debe estar definido en el entorno Render
       - key: TELEGRAM_CHAT_ID
-        sync: false
+        sync: false  # ID del chat donde se envían los mensajes
       - key: ENVIAR_RESUMEN_DIARIO
         value: "true"
       - key: RESUMEN_HORA
-        value: "09:30"
+        value: "09:30"  # Esta hora será leída desde os.getenv("RESUMEN_HORA")
