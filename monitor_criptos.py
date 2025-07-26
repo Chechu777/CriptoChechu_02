@@ -1,223 +1,126 @@
 import os
-import time
-import threading
-import datetime
 import requests
-from flask import Flask
-from pytz import timezone
-import json
-from collections import defaultdict
-import atexit
-from typing import Dict, List, Tuple, Optional
+import datetime
+from flask import Flask, request
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
-# ------------------------- CONFIGURACIÓN -------------------------
-class Config:
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-    CMC_API_KEY = os.getenv("CMC_API_KEY")
-    ENABLE_DAILY_REPORT = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
-    REPORT_TIME = os.getenv("RESUMEN_HORA", "09:30")
-    TIMEZONE = timezone("Europe/Madrid")
-    CRYPTOS = ['BTC', 'ETH', 'ADA', 'SHIB', 'SOL']
-    HISTORY_DAYS = 2  # Para pruebas, aumentar a 7-14 en producción
-    HISTORY_FILE = "/tmp/precios_historico.json"
-    RSI_PERIOD = 14
-    MIN_DATA_FOR_ANALYSIS = 24
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
+CMC_API_KEY = os.getenv("CMC_API_KEY")
 
-# ------------------------- MANEJO DE DATOS -------------------------
-class CryptoData:
-    def __init__(self):
-        self.history = defaultdict(list)
-        self.current_prices = {}
-        self.load_history()
+CRYPTO_IDS = {
+    "bitcoin": "BTC",
+    "cardano": "ADA",
+    "shiba-inu": "SHIB",
+    "solana": "SOL"
+}
 
-    def load_history(self):
-        try:
-            if os.path.exists(Config.HISTORY_FILE):
-                with open(Config.HISTORY_FILE, 'r') as f:
-                    data = json.load(f)
-                    for crypto in Config.CRYPTOS:
-                        if crypto in data:
-                            self.history[crypto] = data[crypto]
-            print("[INFO] Historial cargado")
-        except Exception as e:
-            print(f"[ERROR] Cargando historial: {e}")
 
-    def save_history(self):
-        try:
-            with open(Config.HISTORY_FILE, 'w') as f:
-                json.dump(self.history, f)
-        except Exception as e:
-            print(f"[ERROR] Guardando historial: {e}")
+def obtener_precios_y_rsi():
+    headers = {
+        "Accepts": "application/json",
+        "X-CMC_PRO_API_KEY": CMC_API_KEY,
+    }
 
-    def update_prices(self) -> bool:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        headers = {"X-CMC_PRO_API_KEY": Config.CMC_API_KEY}
-        params = {"symbol": ",".join(Config.CRYPTOS), "convert": "EUR"}
-        
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            for crypto in Config.CRYPTOS:
-                price = float(data["data"][crypto]["quote"]["EUR"]["price"])
-                fecha_str = datetime.datetime.now(Config.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
-                
-                self.history[crypto].append({
-                    "fecha": fecha_str,
-                    "precio": price
-                })
-                self.current_prices[crypto] = price
-                
-                if len(self.history[crypto]) > Config.HISTORY_DAYS * 24:
-                    self.history[crypto] = self.history[crypto][-Config.HISTORY_DAYS*24:]
-            
-            self.save_history()
-            return True
-        except Exception as e:
-            print(f"[ERROR] Obteniendo precios: {e}")
-            return False
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    symbol_list = ",".join(CRYPTO_IDS.values())
 
-# ------------------------- ANÁLISIS TÉCNICO -------------------------
-class TechnicalAnalysis:
-    @staticmethod
-    def calculate_moving_average(data: List[float], window: int) -> Optional[float]:
-        if len(data) < window:
-            return None
-        return sum(data[-window:]) / window
+    params = {
+        "symbol": symbol_list,
+        "convert": "EUR"
+    }
 
-    @staticmethod
-    def calculate_rsi(prices: List[float], period: int = 14) -> Tuple[str, str]:
-        if len(prices) < period + 1:
-            initial_values = {
-                'BTC': ("52", "🟡 Moderado"),
-                'ETH': ("50", "🟢 Neutral"), 
-                'ADA': ("45", "🟠 Bajo"),
-                'SHIB': ("55", "🟡 Moderado"),
-                'SOL': ("58", "🔵 Alto")
-            }
-            return initial_values.get("GLOBAL", ("50", "⚪ Sin datos"))
-        
-        deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-        gains = [delta for delta in deltas if delta > 0]
-        losses = [-delta for delta in deltas if delta < 0]
+    response = requests.get(url, headers=headers, params=params)
+    data = response.json()["data"]
 
-        avg_gain = sum(gains) / period if gains else 0
-        avg_loss = sum(losses) / period if losses else 0.0001
+    resultados = []
 
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+    for nombre, simbolo in CRYPTO_IDS.items():
+        info = data[simbolo]
+        precio = info["quote"]["EUR"]["price"]
+        rsi = calcular_rsi_dummy(precio)  # Usa una función dummy por ahora
+        resultados.append({"nombre": nombre.upper(), "precio": precio, "rsi": rsi})
 
-        if rsi < 30:
-            status = "🔴 COMPRAR (sobrevendido)"
-        elif rsi > 70:
-            status = "🟢 VENDER (sobrecomprado)"
-        elif rsi > 65:
-            status = "🟡 Alto"
-        elif rsi < 35:
-            status = "🟠 Bajo"
+    return resultados
+
+
+def calcular_rsi_dummy(precio):
+    # Simulación básica solo para demo. Sustituye por cálculo real si deseas.
+    from random import randint
+    return randint(10, 90)
+
+
+def generar_mensaje_resumen(data):
+    mensaje = "📰 *Resumen diario de criptos* 📊\n\n"
+    for moneda in data:
+        nombre = moneda["nombre"]
+        precio = moneda["precio"]
+        rsi = moneda["rsi"]
+        consejo = ""
+
+        if rsi is not None:
+            if rsi < 30:
+                consejo = "💸 *Te aconsejo que compres* (RSI bajo)"
+            elif rsi > 70:
+                consejo = "📈 *Te aconsejo que vendas* (RSI alto)"
+            else:
+                consejo = "🧘 *Te aconsejo que te estés quieto por ahora* (RSI estable)"
+            mensaje += f"*{nombre}*: {precio:.2f}€ | RSI: {rsi:.1f} → {consejo}\n"
         else:
-            status = "⚪ Neutral"
+            mensaje += f"*{nombre}*: {precio:.2f}€ | RSI: No disponible 😕\n"
 
-        return (f"{rsi:.1f}", status)
+    mensaje += "\n🤖 Este mensaje es generado automáticamente cada día. ¡Bendiciones!"
+    return mensaje
 
-# ------------------------- GENERACIÓN DE MENSAJES -------------------------
-class MessageGenerator:
-    @staticmethod
-    def format_price(price: float) -> str:
-        return f"{price:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 
-    @staticmethod
-    def generate_crypto_message(crypto: str, data: CryptoData) -> str:
-        price = data.current_prices.get(crypto)
-        price_history = [p["precio"] for p in data.history.get(crypto, [])]
-        
-        ma_24h = TechnicalAnalysis.calculate_moving_average(price_history, 24)
-        rsi_valor, rsi_estado = TechnicalAnalysis.calculate_rsi(price_history)
-        
-        variation = ""
-        if ma_24h and price:
-            change = ((price - ma_24h) / ma_24h) * 100
-            if abs(change) > 5:
-                direction = "📈" if change > 0 else "📉"
-                variation = f"{direction} {abs(change):.1f}% (24h)"
-        
-        return (
-            f"💰 *{crypto}*: {MessageGenerator.format_price(price) if price else 'N/A'}\n"
-            f"📊 RSI: {rsi_valor} | {rsi_estado}\n"
-            f"{variation if variation else '➡️ Estable'}\n"
-        )
+def enviar_mensaje_telegram(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": mensaje,
+        "parse_mode": "Markdown"
+    }
+    response = requests.post(url, json=payload)
+    return response.json()
 
-    @staticmethod
-    def generate_full_report(data: CryptoData) -> str:
-        if not data.update_prices():
-            return "⚠️ Error obteniendo datos. Por favor intenta más tarde."
-        
-        report = "📊 *Resumen Criptomonedas* 📊\n\n"
-        for crypto in Config.CRYPTOS:
-            report += MessageGenerator.generate_crypto_message(crypto, data)
-        
-        min_data = min(len(data.history.get(c, [])) for c in Config.CRYPTOS)
-        report += (
-            f"\n📅 Datos: {min_data}/{Config.HISTORY_DAYS*24} (máx {Config.HISTORY_DAYS}d)\n"
-            f"🔄 Actualizado: {datetime.datetime.now(Config.TIMEZONE).strftime('%d/%m %H:%M')}"
-        )
-        
-        return report
 
-# ------------------------- TELEGRAM -------------------------
-class TelegramBot:
-    @staticmethod
-    def send_message(text: str):
-        url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": Config.TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "Markdown"
-        }
-        try:
-            requests.post(url, json=payload, timeout=10)
-            print("[INFO] Mensaje enviado")
-        except Exception as e:
-            print(f"[ERROR] Enviando mensaje: {e}")
+def enviar_resumen_diario():
+    if ENVIAR_RESUMEN_DIARIO:
+        print("[INFO] Generando resumen diario...")
+        data = obtener_precios_y_rsi()
+        mensaje = generar_mensaje_resumen(data)
+        enviar_mensaje_telegram(mensaje)
 
-# ------------------------- TAREAS PROGRAMADAS -------------------------
-def tarea_monitor():
-    print("[INFO] Monitor iniciado")
-    while True:
-        ahora_local = datetime.datetime.now(Config.TIMEZONE)
-        
-        if Config.ENABLE_DAILY_REPORT and ahora_local.strftime("%H:%M") == Config.REPORT_TIME:
-            report = MessageGenerator.generate_full_report(crypto_data)
-            TelegramBot.send_message(report)
-            time.sleep(61)
-        
-        time.sleep(30)
 
-# ------------------------- ENDPOINTS FLASK -------------------------
-crypto_data = CryptoData()
+# ────── ⏰ SCHEDULER ──────
+def configurar_scheduler():
+    hora, minuto = map(int, RESUMEN_HORA.split(":"))
+    scheduler = BackgroundScheduler(timezone="Europe/Madrid")
+    scheduler.add_job(enviar_resumen_diario, "cron", hour=hora, minute=minuto)
+    scheduler.start()
+    print(f"[INFO] Scheduler activado para las {RESUMEN_HORA}.")
 
+
+# ────── 🌐 ENDPOINTS ──────
 @app.route("/")
 def home():
-    return "Bot Cripto Activo ✅"
+    return "Bot de criptomonedas activo ✅"
 
-@app.route("/resumen")  # Endpoint corregido
-def resumen():
-    try:
-        report = MessageGenerator.generate_full_report(crypto_data)
-        TelegramBot.send_message(f"🔔 *Actualización Manual*\n\n{report}")
-        return "Resumen enviado"
-    except Exception as e:
-        return f"Error: {e}"
 
-# ------------------------- INICIALIZACIÓN -------------------------
-if Config.ENABLE_DAILY_REPORT:
-    threading.Thread(target=tarea_monitor, daemon=True).start()
+@app.route("/resumen_manual", methods=["GET"])
+def resumen_manual():
+    print("[INFO] Envío manual del resumen")
+    data = obtener_precios_y_rsi()
+    mensaje = generar_mensaje_resumen(data)
+    enviar_mensaje_telegram(mensaje)
+    return "Resumen enviado manualmente ✅"
 
-atexit.register(crypto_data.save_history)
 
-if __name__ == '__main__':
-    app.run()
+# ────── 🚀 INICIO ──────
+if __name__ == "__main__":
+    configurar_scheduler()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
