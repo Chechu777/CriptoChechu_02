@@ -4,6 +4,7 @@ import random
 from flask import Flask
 from supabase import create_client, Client
 from pytz import timezone
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -18,8 +19,6 @@ CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 
 # Inicializar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Variable global para evitar ejecuciones seguidas
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -59,6 +58,24 @@ def guardar_precios(precios):
         except Exception as e:
             enviar_mensaje(f"❌ Error guardando {cripto}: {e}")
 
+def debe_ejecutar():
+    ahora = datetime.utcnow()
+    try:
+        res = supabase.table("ejecuciones").select("*").order("timestamp", desc=True).limit(1).execute()
+        registros = res.data
+        if not registros:
+            # Primera vez, guardar y permitir ejecución
+            supabase.table("ejecuciones").insert({"timestamp": ahora.isoformat()}).execute()
+            return True
+        ultima = datetime.fromisoformat(registros[0]["timestamp"])
+        if (ahora - ultima) > timedelta(minutes=60):
+            supabase.table("ejecuciones").insert({"timestamp": ahora.isoformat()}).execute()
+            return True
+        return False
+    except Exception as e:
+        enviar_mensaje(f"⚠️ Error validando ejecución: {e}")
+        return True  # Por si hay error, mejor no bloquear
+
 def generar_recomendacion(rsi):
     if rsi < 30:
         return "Te aconsejo que *compres* 🟢 (RSI bajo)"
@@ -94,7 +111,6 @@ def resumen_manual():
     mensaje += f"⏱️ Actualizado: {hora_europa.strftime('%d/%m %H:%M')} (Hora Europa)"
 
     enviar_mensaje(mensaje)
-
     return "Resumen enviado correctamente ✅"
 
 @app.route("/")
