@@ -89,6 +89,10 @@ def construir_mensaje():
             mensaje += f"*{cripto}*\nPrecio: {precio:.5f} €\nRSI: {rsi}\n{consejo}\n\n"
     return mensaje
 
+@app.route("/resumen")
+def mostrar_resumen():
+    return "<h1>Resumen Criptos</h1><p>Próximamente más info aquí.</p>"
+
 def es_hora_de_resumen():
     if not ENVIAR_RESUMEN_DIARIO:
         return False
@@ -106,7 +110,8 @@ def forzar_envio():
 
 @app.route("/", methods=["GET"])
 def ejecutar_automatico():
-    ahora = datetime.utcnow()
+    from datetime import timezone
+    ahora = datetime.now(timezone.utc)
     ultima = obtener_ultima_fecha_envio()
 
     if not ultima or ahora - ultima > timedelta(minutes=59):
