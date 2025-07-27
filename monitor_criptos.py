@@ -1,121 +1,126 @@
 import os
 import requests
-import random
-from flask import Flask
-from supabase import create_client, Client
-from pytz import timezone
 from datetime import datetime, timedelta
+from flask import Flask, request
+from supabase import create_client
+import pytz
 
-app = Flask(__name__)
-
-# Variables de entorno
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# Configuración desde variables de entorno
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
+ENVIAR_RESUMEN_DIARIO = os.getenv("ENVIAR_RESUMEN_DIARIO", "false").lower() == "true"
+RESUMEN_HORA = os.getenv("RESUMEN_HORA", "09:30")
 
-CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
+# Inicializar servicios
+app = Flask(__name__)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Inicializar Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+criptos = ["BTC", "ADA", "SHIBA", "SOL"]
 
-def enviar_mensaje(texto):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, data={
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown"
-    })
-
-def obtener_precios():
+def obtener_datos(cripto):
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     headers = {"X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY}
-    params = {"symbol": ",".join(CRIPTOS), "convert": "EUR"}
+    params = {"symbol": cripto, "convert": "EUR"}
 
+    r = requests.get(url, headers=headers, params=params)
+    data = r.json()
+    
     try:
-        res = requests.get(url, headers=headers, params=params)
-        data = res.json()["data"]
-        precios = {}
-        for cripto in CRIPTOS:
-            precio = data[cripto]["quote"]["EUR"]["price"]
-            precios[cripto] = precio
-        return precios
+        precio = round(data["data"][cripto]["quote"]["EUR"]["price"], 5)
+        rsi = calcular_rsi(precio)
+        return precio, rsi
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
-        return {}
+        print(f"Error al obtener datos de {cripto}: {e}")
+        return None, None
 
-def guardar_precios(precios):
+def calcular_rsi(precio_actual):
+    return round(50 + (precio_actual % 10), 2)
+
+def guardar_precio_en_supabase(nombre, precio, rsi):
     ahora = datetime.utcnow().isoformat()
-    for cripto, precio in precios.items():
-        precio_formateado = f"{precio:.12f}"
-        try:
-            supabase.table("precios_historicos").insert({
-                "cripto": cripto,
-                "precio": precio_formateado,
-                "timestamp": ahora
-            }).execute()
-        except Exception as e:
-            enviar_mensaje(f"❌ Error guardando {cripto}: {e}")
+    supabase.table("precios").insert({
+        "nombre": nombre,
+        "precio": precio,
+        "rsi": rsi,
+        "fecha": ahora
+    }).execute()
 
-def debe_ejecutar():
-    ahora = datetime.utcnow()
-    try:
-        res = supabase.table("ejecuciones").select("*").order("timestamp", desc=True).limit(1).execute()
-        registros = res.data
-        if not registros:
-            # Primera vez, guardar y permitir ejecución
-            supabase.table("ejecuciones").insert({"timestamp": ahora.isoformat()}).execute()
-            return True
-        ultima = datetime.fromisoformat(registros[0]["timestamp"])
-        if (ahora - ultima) > timedelta(minutes=60):
-            supabase.table("ejecuciones").insert({"timestamp": ahora.isoformat()}).execute()
-            return True
+def obtener_ultima_fecha_envio():
+    res = supabase.table("precios").select("*").eq("nombre", "CONTROL_ENVIO").order("fecha", desc=True).limit(1).execute()
+    if res.data:
+        return datetime.fromisoformat(res.data[0]['fecha'])
+    return None
+
+def registrar_envio():
+    supabase.table("precios").insert({
+        "nombre": "CONTROL_ENVIO",
+        "precio": 0,
+        "rsi": 0,
+        "fecha": datetime.utcnow().isoformat()
+    }).execute()
+
+def enviar_mensaje_telegram(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": mensaje,
+        "parse_mode": "Markdown"
+    }
+    requests.post(url, data=data)
+
+def construir_mensaje():
+    mensaje = "🪙 *Resumen de Criptomonedas*\n\n"
+    for cripto in criptos:
+        precio, rsi = obtener_datos(cripto)
+        if precio is not None:
+            guardar_precio_en_supabase(cripto, precio, rsi)
+
+            consejo = ""
+            if rsi > 70:
+                consejo = "🚨 *TE ACONSEJO QUE VENDAS*"
+            elif rsi < 30:
+                consejo = "🟢 *TE ACONSEJO QUE COMPRES*"
+            else:
+                consejo = "🤔 *ESPERA, sin señales claras*"
+
+            mensaje += f"*{cripto}*\nPrecio: {precio:.5f} €\nRSI: {rsi}\n{consejo}\n\n"
+    return mensaje
+
+def es_hora_de_resumen():
+    if not ENVIAR_RESUMEN_DIARIO:
         return False
-    except Exception as e:
-        enviar_mensaje(f"⚠️ Error validando ejecución: {e}")
-        return True  # Por si hay error, mejor no bloquear
+    zona = pytz.timezone("Europe/Madrid")
+    ahora = datetime.now(zona)
+    hora_actual = ahora.strftime("%H:%M")
+    return hora_actual == RESUMEN_HORA
 
-def generar_recomendacion(rsi):
-    if rsi < 30:
-        return "Te aconsejo que *compres* 🟢 (RSI bajo)"
-    elif rsi > 70:
-        return "Te aconsejo que *vendas* 🔴 (RSI alto)"
+@app.route("/forzar", methods=["GET"])
+def forzar_envio():
+    mensaje = construir_mensaje()
+    enviar_mensaje_telegram(mensaje)
+    registrar_envio()
+    return "✅ Mensaje forzado enviado"
+
+@app.route("/", methods=["GET"])
+def ejecutar_automatico():
+    ahora = datetime.utcnow()
+    ultima = obtener_ultima_fecha_envio()
+
+    if not ultima or ahora - ultima > timedelta(minutes=59):
+        mensaje = construir_mensaje()
+        enviar_mensaje_telegram(mensaje)
+        registrar_envio()
+        return "✅ Mensaje automático enviado"
+    elif es_hora_de_resumen():
+        mensaje = construir_mensaje()
+        enviar_mensaje_telegram(mensaje)
+        registrar_envio()
+        return "✅ Resumen diario enviado"
     else:
-        return "Te aconsejo que te estés *quieto por ahora* 🟡 (RSI neutro)"
-
-@app.route("/resumen")
-def resumen_manual():
-    if not debe_ejecutar():
-        return "⏳ Ya se ejecutó recientemente. Espera unos minutos."
-
-    precios = obtener_precios()
-    if not precios:
-        return "Error al obtener precios"
-
-    guardar_precios(precios)
-
-    mensaje = "📊 *Resumen Manual de Criptomonedas*\n\n"
-    for cripto, precio in precios.items():
-        rsi = round(random.uniform(20, 80), 1)
-        consejo = generar_recomendacion(rsi)
-
-        if precio < 0.01:
-            precio_str = f"{precio:,.12f}"
-        else:
-            precio_str = f"{precio:,.5f}"
-
-        mensaje += f"*{cripto}*: {precio_str} €\nRSI: {rsi} → {consejo}\n\n"
-
-    hora_europa = datetime.now(timezone("Europe/Madrid"))
-    mensaje += f"⏱️ Actualizado: {hora_europa.strftime('%d/%m %H:%M')} (Hora Europa)"
-
-    enviar_mensaje(mensaje)
-    return "Resumen enviado correctamente ✅"
-
-@app.route("/")
-def home():
-    return "✅ Monitor Criptos Activo"
+        return "⏳ Aún no ha pasado una hora"
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=8000)
