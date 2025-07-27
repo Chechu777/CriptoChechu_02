@@ -59,7 +59,8 @@ def insertar_en_supabase(nombre, precio, rsi, fecha):
 
 def generar_y_enviar_resumen():
     precios = obtener_precios()
-    ahora = datetime.now(timezone.utc)
+    from zoneinfo import ZoneInfo
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
     resumen = "<b>📊 Resumen Manual de Criptomonedas</b>\n"
 
     for m in MONEDAS:
