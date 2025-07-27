@@ -139,6 +139,7 @@ def seguir_trader():
 
     ahora = datetime.now(ZoneInfo("Europe/Madrid"))
     movimientos_detectados = []
+    mensajes = []
 
     for moneda, trader_id in monedas_traders.items():
         if not trader_id:
@@ -146,10 +147,12 @@ def seguir_trader():
 
         datos = obtener_posicion_trader(trader_id)
         if not datos or not datos.get("data"):
+            mensajes.append(f"⚠️ No se pudo obtener información de {moneda}.")
             continue
 
         posiciones = datos["data"].get("positionVos", [])
         if not posiciones:
+            mensajes.append(f"ℹ️ El trader de {moneda} no tiene posiciones abiertas.")
             continue
 
         for pos in posiciones:
@@ -159,15 +162,41 @@ def seguir_trader():
             hash_actual = generar_hash_trade(pos)
             ultimo = obtener_ultimo_trade(moneda)
 
+            direccion = pos.get("direction", "?")
+            entrada = pos.get("entryPrice", "?")
+            take_profit = pos.get("takeProfit", "No especificado")
+            stop_loss = pos.get("stopLoss", "No especificado")
+
+            descripcion = {
+                "LONG": "Compra (espera que suba)",
+                "SHORT": "Venta (espera que baje)"
+            }.get(direccion, "Desconocido")
+
             if not ultimo or hash_actual != ultimo.get("hash_trade"):
                 insertar_trade_supabase(moneda, trader_id, pos, ahora, hash_actual)
                 notificar_trade(moneda, trader_id, pos, ahora)
                 movimientos_detectados.append(moneda)
+            else:
+                # Aun sin cambios, mostramos el estado actual del trader
+                mensaje = f"""
+📊 <b>Estado actual del trader en {moneda}</b>
+🔁 Dirección: <b>{direccion}</b> - {descripcion}
+💶 Precio entrada: <b>{entrada} €</b>
+📈 Take Profit: <b>{take_profit}</b>
+📉 Stop Loss: <b>{stop_loss}</b>
+🕒 Última actualización: {ahora.strftime('%d/%m %H:%M')}
+"""
+                mensajes.append(mensaje)
 
-    if not movimientos_detectados:
-        enviar_telegram("No se detectaron movimientos nuevos en los traders seguidos.")
+    if movimientos_detectados:
+        resumen = "<b>✅ Nuevos movimientos detectados:</b>\n" + ", ".join(movimientos_detectados)
+        mensajes.append(resumen)
+    else:
+        mensajes.append("🔎 No se detectaron movimientos nuevos en los traders seguidos.")
 
-    return f"<h1>✔ Seguimiento completado</h1><p>Movimientos detectados en: {', '.join(movimientos_detectados) if movimientos_detectados else 'ninguno'}.</p>"
+    # Unir todos los mensajes y enviar a Telegram
+    enviar_telegram("\n\n".join(mensajes))
+    return f"<h1>✔ Seguimiento completado</h1><p>{' | '.join(movimientos_detectados) if movimientos_detectados else 'Sin cambios detectados'}.</p>"
 
 # ======================== ENDPOINTS EXISTENTES ========================
 
