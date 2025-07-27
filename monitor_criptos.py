@@ -109,7 +109,6 @@ def insertar_trade_supabase(moneda, trader_id, datos, fecha, hash_trade):
     }).execute()
 
 def notificar_trade(moneda, trader_id, datos, fecha):
-    # Mapear para mensaje más claro (si quieres lo contrario, solo invierte LONG y SHORT)
     significado = {
         "LONG": "Compra (posición abierta esperando que suba)",
         "SHORT": "Venta (posición abierta esperando que baje)"
@@ -126,7 +125,7 @@ def notificar_trade(moneda, trader_id, datos, fecha):
         mensaje += f"📉 Stop Loss: {datos['stopLoss']} €\n"
     enviar_telegram(mensaje)
 
-# ======================== ENDPOINT NUEVO ========================
+# ======================== ENDPOINT DE MONITOREO ========================
 
 @app.route("/seguir_trader")
 def seguir_trader():
@@ -177,15 +176,14 @@ def seguir_trader():
                 notificar_trade(moneda, trader_id, pos, ahora)
                 movimientos_detectados.append(moneda)
             else:
-                # Aun sin cambios, mostramos el estado actual del trader
-                mensaje = f"""
-📊 <b>Estado actual del trader en {moneda}</b>
-🔁 Dirección: <b>{direccion}</b> - {descripcion}
-💶 Precio entrada: <b>{entrada} €</b>
-📈 Take Profit: <b>{take_profit}</b>
-📉 Stop Loss: <b>{stop_loss}</b>
-🕒 Última actualización: {ahora.strftime('%d/%m %H:%M')}
-"""
+                mensaje = (
+                    f"📊 <b>Estado actual del trader en {moneda}</b>\n"
+                    f"🔁 Dirección: <b>{direccion}</b> - {descripcion}\n"
+                    f"💶 Precio entrada: <b>{entrada} €</b>\n"
+                    f"📈 Take Profit: <b>{take_profit}</b>\n"
+                    f"📉 Stop Loss: <b>{stop_loss}</b>\n"
+                    f"🕒 Última actualización: {ahora.strftime('%d/%m %H:%M')}"
+                )
                 mensajes.append(mensaje)
 
     if movimientos_detectados:
@@ -194,11 +192,10 @@ def seguir_trader():
     else:
         mensajes.append("🔎 No se detectaron movimientos nuevos en los traders seguidos.")
 
-    # Unir todos los mensajes y enviar a Telegram
     enviar_telegram("\n\n".join(mensajes))
     return f"<h1>✔ Seguimiento completado</h1><p>{' | '.join(movimientos_detectados) if movimientos_detectados else 'Sin cambios detectados'}.</p>"
 
-# ======================== ENDPOINTS EXISTENTES ========================
+# ======================== ENDPOINTS EXTRA ========================
 
 @app.route("/")
 def home():
