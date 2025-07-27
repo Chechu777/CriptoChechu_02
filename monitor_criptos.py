@@ -70,7 +70,7 @@ def generar_y_enviar_resumen():
         consejo = consejo_rsi(rsi)
         resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
 
-    resumen += f"\n🗱️ Actualizado: {ahora.astimezone().strftime('%d/%m %H:%M')} (Hora Europa)"
+    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
 
 # Rutas
