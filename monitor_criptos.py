@@ -109,8 +109,15 @@ def insertar_trade_supabase(moneda, trader_id, datos, fecha, hash_trade):
     }).execute()
 
 def notificar_trade(moneda, trader_id, datos, fecha):
+    # Mapear para mensaje más claro (si quieres lo contrario, solo invierte LONG y SHORT)
+    significado = {
+        "LONG": "Compra (posición abierta esperando que suba)",
+        "SHORT": "Venta (posición abierta esperando que baje)"
+    }
+    descripcion = significado.get(datos["direction"], datos["direction"])
+
     mensaje = f"📢 <b>Movimiento detectado en TRADER_{moneda}</b>\n"
-    mensaje += f"🔺 Dirección: <b>{datos['direction']}</b>\n"
+    mensaje += f"🔺 Dirección: <b>{datos['direction']}</b> - {descripcion}\n"
     mensaje += f"💰 Precio entrada: <b>{datos['entryPrice']} €</b>\n"
     mensaje += f"🕒 Fecha: {fecha.strftime('%d/%m %H:%M')}\n"
     if datos.get("takeProfit"):
@@ -156,6 +163,9 @@ def seguir_trader():
                 insertar_trade_supabase(moneda, trader_id, pos, ahora, hash_actual)
                 notificar_trade(moneda, trader_id, pos, ahora)
                 movimientos_detectados.append(moneda)
+
+    if not movimientos_detectados:
+        enviar_telegram("No se detectaron movimientos nuevos en los traders seguidos.")
 
     return f"<h1>✔ Seguimiento completado</h1><p>Movimientos detectados en: {', '.join(movimientos_detectados) if movimientos_detectados else 'ninguno'}.</p>"
 
