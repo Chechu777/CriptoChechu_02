@@ -2,8 +2,9 @@ import os
 import requests
 import random
 from flask import Flask
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client, Client
+from pytz import timezone
 
 app = Flask(__name__)
 
@@ -14,10 +15,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]  # ← CORREGIDO
+CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 
 # Inicializar Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Variable global para evitar ejecuciones seguidas
+ultima_ejecucion = None
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -38,7 +42,7 @@ def obtener_precios():
         precios = {}
         for cripto in CRIPTOS:
             precio = data[cripto]["quote"]["EUR"]["price"]
-            precios[cripto] = precio  # deja el valor tal cual, sin formatear aún
+            precios[cripto] = precio
         return precios
     except Exception as e:
         enviar_mensaje(f"⚠️ Error al obtener precios: {e}")
@@ -47,8 +51,7 @@ def obtener_precios():
 def guardar_precios(precios):
     ahora = datetime.utcnow().isoformat()
     for cripto, precio in precios.items():
-        # Guardar sin coma, 12 decimales para los bajos
-        precio_formateado = f"{precio:.12f}"  # sin coma aquí
+        precio_formateado = f"{precio:.12f}"
         try:
             supabase.table("precios_historicos").insert({
                 "cripto": cripto,
@@ -66,8 +69,19 @@ def generar_recomendacion(rsi):
     else:
         return "Te aconsejo que te estés *quieto por ahora* 🟡 (RSI neutro)"
 
+def debe_ejecutar():
+    global ultima_ejecucion
+    ahora = datetime.utcnow()
+    if not ultima_ejecucion or (ahora - ultima_ejecucion) > timedelta(minutes=10):
+        ultima_ejecucion = ahora
+        return True
+    return False
+
 @app.route("/resumen")
 def resumen_manual():
+    if not debe_ejecutar():
+        return "⏳ Ya se ejecutó recientemente. Espera unos minutos."
+
     precios = obtener_precios()
     if not precios:
         return "Error al obtener precios"
@@ -80,13 +94,15 @@ def resumen_manual():
         consejo = generar_recomendacion(rsi)
 
         if precio < 0.01:
-            precio_str = f"{precio:,.12f}"  # con coma para miles
+            precio_str = f"{precio:,.12f}"
         else:
-            precio_str = f"{precio:,.5f}"   # con coma para miles
+            precio_str = f"{precio:,.5f}"
 
         mensaje += f"*{cripto}*: {precio_str} €\nRSI: {rsi} → {consejo}\n\n"
 
-    mensaje += f"⏱️ Actualizado: {datetime.now().strftime('%d/%m %H:%M')} (Hora Europa)"
+    hora_europa = datetime.now(timezone("Europe/Madrid"))
+    mensaje += f"⏱️ Actualizado: {hora_europa.strftime('%d/%m %H:%M')} (Hora Europa)"
+
     enviar_mensaje(mensaje)
 
     return "Resumen enviado correctamente ✅"
