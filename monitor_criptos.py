@@ -37,11 +37,11 @@ def obtener_rsi(moneda):
 
 def consejo_rsi(rsi):
     if rsi > 70:
-        return "🔴 RSI alto, quizá vender"
+        return "🔴 RSI alto, quizá vender\n⚠️ Podría haber una bajada en el precio."
     elif rsi < 30:
-        return "🟢 RSI bajo, quizá comprar"
+        return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar pronto al alza."
     else:
-        return "🟡 Te aconsejo que te estés quieto por ahora"
+        return "🟡 Estate quieto por ahora chato, no hagas huevadas"
 
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
