@@ -2,7 +2,6 @@ import os
 import requests
 import random
 from flask import Flask
-from datetime import datetime, timedelta
 from supabase import create_client, Client
 from pytz import timezone
 
@@ -21,7 +20,6 @@ CRIPTOS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Variable global para evitar ejecuciones seguidas
-ultima_ejecucion = None
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -68,14 +66,6 @@ def generar_recomendacion(rsi):
         return "Te aconsejo que *vendas* 🔴 (RSI alto)"
     else:
         return "Te aconsejo que te estés *quieto por ahora* 🟡 (RSI neutro)"
-
-def debe_ejecutar():
-    global ultima_ejecucion
-    ahora = datetime.utcnow()
-    if not ultima_ejecucion or (ahora - ultima_ejecucion) > timedelta(minutes=10):
-        ultima_ejecucion = ahora
-        return True
-    return False
 
 @app.route("/resumen")
 def resumen_manual():
