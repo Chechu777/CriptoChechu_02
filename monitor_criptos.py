@@ -39,22 +39,46 @@ def obtener_precios():
         print(f"Error API CoinMarketCap: {str(e)}")
         return None
 
+def insertar_en_supabase(nombre, precio, rsi, fecha):
+    try:
+        # Asegurar que la fecha tenga la zona horaria correcta
+        if fecha.tzinfo is None:
+            fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+        elif fecha.tzinfo != ZoneInfo("Europe/Madrid"):
+            fecha = fecha.astimezone(ZoneInfo("Europe/Madrid"))
+            
+        # Convertir a string ISO con zona horaria
+        fecha_iso = fecha.isoformat()
+        
+        supabase.table("precios").insert({
+            "nombre": nombre,
+            "precio": precio,
+            "rsi": rsi,
+            "fecha": fecha_iso
+        }).execute()
+    except Exception as e:
+        print(f"Error al insertar en Supabase: {str(e)}")
+
 def generar_resumen_criptos():
     precios = obtener_precios()
     if not precios:
-        enviar_telegram("⚠️ Error al obtener precios")
+        enviar_telegram("⚠️ No se pudieron obtener los precios de las criptomonedas")
         return False
     
+    # Obtener fecha/hora actual con zona horaria correcta
     ahora = datetime.now(ZoneInfo("Europe/Madrid"))
-    mensaje = "<b>📊 Resumen Criptomonedas</b>\n"
     
-    for moneda, precio in precios.items():
-        rsi = round(random.uniform(30, 70), 2)
-        insertar_en_supabase(moneda, precio, rsi, ahora)
-        mensaje += f"\n<b>{moneda}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo_rsi(rsi)}\n"
-    
-    mensaje += f"\n🕒 Actualizado: {ahora.strftime('%d/%m %H:%M')}"
-    enviar_telegram(mensaje)
+    resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
+
+    for m in MONEDAS:
+        precio = precios[m]
+        rsi = obtener_rsi(m)
+        insertar_en_supabase(m, precio, rsi, ahora)  # Pasamos el objeto datetime con zona horaria
+        consejo = consejo_rsi(rsi)
+        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
+
+    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
+    enviar_telegram(resumen)
     return True
 
 # ========== SISTEMA DE TRADERS ==========
