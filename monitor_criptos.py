@@ -6,8 +6,6 @@ from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
-from binance.client import Client as BinanceClient
-import pytz
 
 # Configuración
 app = Flask(__name__)
@@ -18,10 +16,6 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-
-binance_client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
 
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 
@@ -44,13 +38,18 @@ def obtener_datos_mercado():
         }
     return resultados
 
-# Calcular RSI real desde datos de Binance
+# Calcular RSI real desde CoinGecko
 
 def obtener_rsi(moneda, intervalo="1h", periodo=14):
-    simbolo = moneda + "EUR"
+    mapping = {"BTC": "bitcoin", "ETH": "ethereum", "ADA": "cardano", "SHIB": "shiba-inu", "SOL": "solana"}
+    if moneda not in mapping:
+        return None
+    coingecko_id = mapping[moneda]
     try:
-        klines = binance_client.get_klines(symbol=simbolo, interval=intervalo, limit=periodo + 1)
-        cierres = [float(k[4]) for k in klines]
+        url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=eur&days=2&interval=hourly"
+        response = requests.get(url)
+        datos = response.json()["prices"][-(periodo+1):]
+        cierres = [precio[1] for precio in datos]
         serie = pd.Series(cierres)
         delta = serie.diff().dropna()
         ganancia = delta.where(delta > 0, 0.0)
