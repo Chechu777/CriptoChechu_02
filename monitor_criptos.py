@@ -67,7 +67,8 @@ def obtener_trades_trader(trader_uid, moneda):
     if not trader_uid:
         return None
         
-    endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPerformance"
+    # Endpoint alternativo para datos públicos
+    endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
     params = {
         "encryptedUid": trader_uid,
         "tradeType": "PERPETUAL"
@@ -78,19 +79,36 @@ def obtener_trades_trader(trader_uid, moneda):
         data = response.json()
         
         if data and "data" in data and data["data"]:
-            # Obtener el último trade de la lista de performance
+            # Obtener posición más reciente
+            ultima_posicion = data["data"][0]
+            return {
+                "moneda": ultima_posicion["symbol"].replace("USDT", ""),
+                "precio": float(ultima_posicion["entryPrice"]),
+                "direccion": "LONG (Compra)" if float(ultima_posicion["amount"]) > 0 else "SHORT (Venta)",
+                "fecha": datetime.fromtimestamp(ultima_posicion["updateTime"] / 1000)
+            }
+    except Exception as e:
+        print(f"Error al consultar trader {trader_uid}: {str(e)}")
+    
+    # Si falla, intentar con endpoint alternativo
+    try:
+        endpoint_alt = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPerformance"
+        response = requests.post(endpoint_alt, json={"encryptedUid": trader_uid})
+        data = response.json()
+        
+        if data and "data" in data and data["data"]:
             ultimo_trade = data["data"][0]
             return {
                 "moneda": moneda,
                 "precio": float(ultimo_trade["entryPrice"]),
                 "direccion": "LONG (Compra)" if ultimo_trade["amount"] > 0 else "SHORT (Venta)",
-                "pnl": float(ultimo_trade["pnl"]),  # Profit/Loss
                 "fecha": datetime.fromtimestamp(ultimo_trade["updateTime"] / 1000)
             }
     except Exception as e:
-        print(f"Error al obtener trades: {str(e)}")
+        print(f"Error en endpoint alternativo: {str(e)}")
+    
     return None
-
+# ==================
 def generar_resumen_traders():
     mensaje = "<b>🔍 Últimos Movimientos de Traders</b>\n\n"
     traders_con_datos = False
@@ -104,10 +122,15 @@ def generar_resumen_traders():
             traders_con_datos = True
             mensaje += (
                 f"📊 <b>TRADER_{moneda}</b>\n"
-                f"🔄 {trade['direccion']} a {trade['precio']:.2f} €\n"
-                f"💰 PnL: {trade['pnl']:.2f} €\n"
-                f"⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n\n"
+                f"💵 {trade['direccion']} a {trade['precio']:.2f} €\n"
+                f"⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n"
             )
+            
+            # Solo mostrar si es el trader de SOL (BTC es privado)
+            if moneda == "SOL":
+                mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n"
+            
+            mensaje += "\n"
             
             # Guardar en Supabase
             supabase.table("trades_historico").insert({
@@ -115,15 +138,14 @@ def generar_resumen_traders():
                 "moneda": moneda,
                 "direccion": trade["direccion"].split(" ")[0],
                 "precio_entrada": trade["precio"],
-                "pnl": trade["pnl"],
                 "fecha_apertura": trade["fecha"].isoformat(),
                 "estado": "ACTIVO"
             }).execute()
         else:
-            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
+            mensaje += f"❌ TRADER_{moneda}: Datos no disponibles (puede ser privado)\n\n"
     
     if not traders_con_datos:
-        mensaje = "⚠️ No hay datos disponibles de ningún trader"
+        mensaje = "⚠️ No se pudieron obtener datos de ningún trader (pueden ser perfiles privados)"
     
     enviar_telegram(mensaje)
 # ===============================
