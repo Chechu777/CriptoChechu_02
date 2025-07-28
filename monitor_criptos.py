@@ -6,7 +6,7 @@ from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import random
 
-# Configuración
+# ================ CONFIGURACIÓN ================ 
 app = Flask(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -24,7 +24,7 @@ TRADERS = {
     "ADA": os.getenv("TRADER_ADA")
 }
 
-# Funciones auxiliares
+# ================ Funciones auxiliares ================
 def obtener_precios():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
@@ -62,11 +62,12 @@ def insertar_en_supabase(nombre, precio, rsi, fecha):
         "fecha": fecha.isoformat()
     }).execute()
 
+# ==============VER_TRADERS=================
 def obtener_trades_trader(trader_uid, moneda):
     if not trader_uid:
         return None
         
-    endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
+    endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPerformance"
     params = {
         "encryptedUid": trader_uid,
         "tradeType": "PERPETUAL"
@@ -77,34 +78,22 @@ def obtener_trades_trader(trader_uid, moneda):
         data = response.json()
         
         if data and "data" in data and data["data"]:
-            ultima_posicion = data["data"][0]
+            # Obtener el último trade de la lista de performance
+            ultimo_trade = data["data"][0]
             return {
                 "moneda": moneda,
-                "precio": float(ultima_posicion["entryPrice"]),
-                "direccion": "LONG (Compra)" if float(ultima_posicion["amount"]) > 0 else "SHORT (Venta)",
-                "fecha": datetime.fromtimestamp(ultima_posicion["updateTime"] / 1000)
+                "precio": float(ultimo_trade["entryPrice"]),
+                "direccion": "LONG (Compra)" if ultimo_trade["amount"] > 0 else "SHORT (Venta)",
+                "pnl": float(ultimo_trade["pnl"]),  # Profit/Loss
+                "fecha": datetime.fromtimestamp(ultimo_trade["updateTime"] / 1000)
             }
     except Exception as e:
-        print(f"Error al obtener trades: {e}")
+        print(f"Error al obtener trades: {str(e)}")
     return None
 
-def generar_y_enviar_resumen():
-    precios = obtener_precios()
-    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
-    resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
-
-    for m in MONEDAS:
-        precio = precios[m]
-        rsi = obtener_rsi(m)
-        insertar_en_supabase(m, precio, rsi, ahora)
-        consejo = consejo_rsi(rsi)
-        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
-
-    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
-    enviar_telegram(resumen)
-
 def generar_resumen_traders():
-    mensaje = "<b>🔍 Movimientos de Traders</b>\n\n"
+    mensaje = "<b>🔍 Últimos Movimientos de Traders</b>\n\n"
+    traders_con_datos = False
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
@@ -112,28 +101,32 @@ def generar_resumen_traders():
             
         trade = obtener_trades_trader(trader_uid, moneda)
         if trade:
+            traders_con_datos = True
             mensaje += (
-                f"📢 <b>TRADER_{moneda}</b>\n"
-                f"💵 {trade['direccion']}: {trade['precio']:.2f} €\n"
-                f"📅 {trade['fecha'].strftime('%d/%m %H:%M')}\n\n"
+                f"📊 <b>TRADER_{moneda}</b>\n"
+                f"🔄 {trade['direccion']} a {trade['precio']:.2f} €\n"
+                f"💰 PnL: {trade['pnl']:.2f} €\n"
+                f"⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n\n"
             )
             
+            # Guardar en Supabase
             supabase.table("trades_historico").insert({
                 "trader_uid": trader_uid,
                 "moneda": moneda,
                 "direccion": trade["direccion"].split(" ")[0],
                 "precio_entrada": trade["precio"],
+                "pnl": trade["pnl"],
                 "fecha_apertura": trade["fecha"].isoformat(),
                 "estado": "ACTIVO"
             }).execute()
         else:
-            mensaje += f"❌ TRADER_{moneda}: Sin movimientos recientes\n\n"
+            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
     
-    if mensaje.count("📢") == 0:
-        mensaje = "⚠️ No hay movimientos de traders para mostrar"
+    if not traders_con_datos:
+        mensaje = "⚠️ No hay datos disponibles de ningún trader"
     
     enviar_telegram(mensaje)
-
+# ===============================
 # Rutas
 @app.route("/")
 def home():
