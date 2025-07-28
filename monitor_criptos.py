@@ -1,5 +1,9 @@
 import os
 import requests
+import hmac
+import hashlib
+import time
+
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
@@ -72,6 +76,72 @@ def generar_y_enviar_resumen():
 
     resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
+
+def obtener_ultimo_trade_real(trader_uid, moneda):
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    endpoint = "https://fapi.binance.com/fapi/v1/userTrades"
+    
+    timestamp = int(time.time() * 1000)
+    params = {
+        "symbol": f"{moneda}USDT",  # Ej: SOLUSDT
+        "limit": 1,  # Solo el último trade
+        "startTime": timestamp - 2592000000,  # Últimos 30 días
+    }
+    
+    # Firma y llamada a la API
+    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+    signature = hmac.new(api_secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    url = f"{endpoint}?{query_string}&signature={signature}"
+    headers = {"X-MBX-APIKEY": api_key}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        trades = response.json()
+        if trades:
+            ultimo_trade = trades[0]
+            return {
+                "moneda": moneda,
+                "precio": float(ultimo_trade["price"]),
+                "direccion": "LONG (Compra)" if ultimo_trade["isBuyer"] else "SHORT (Venta)",
+                "comision": float(ultimo_trade["commission"]),
+                "fecha": datetime.fromtimestamp(ultimo_trade["time"] / 1000)
+            }
+    except Exception as e:
+        print(f"Error al obtener trades: {e}")
+    return None
+
+@app.route("/seguir_trader")
+def seguir_trader():
+    mensaje_telegram = "🔍 <b>Resumen de Movimientos Recientes</b>\n\n"
+    
+    for moneda in ["BTC", "SOL", "SHIB", "ADA"]:
+        trader_uid = os.getenv(f"TRADER_{moneda}")
+        if not trader_uid:
+            continue
+            
+        trade = obtener_ultimo_trade_real(trader_uid, moneda)
+        if trade:
+            mensaje_telegram += (
+                f"📢 <b>Última operación de TRADER_{moneda}</b>\n"
+                f"💵 <b>Precio de {trade['direccion']}</b>: {trade['precio']:.2f} €\n"
+                f"📅 <b>Fecha</b>: {trade['fecha'].strftime('%d/%m a las %H:%M')}\n"
+                f"📊 <b>Comisión pagada</b>: {trade['comision']:.4f} {moneda}\n\n"
+            )
+            # Guardar en Supabase (sin TP/SL ya que no está en userTrades)
+            supabase.table("trades_historico").insert({
+                "trader_uid": trader_uid,
+                "moneda": moneda,
+                "direccion": trade["direccion"].split(" ")[0],  # LONG o SHORT
+                "precio_entrada": trade["precio"],
+                "fecha_apertura": trade["fecha"].isoformat(),
+                "estado": "ACTIVO"
+            }).execute()
+        else:
+            mensaje_telegram += f"❌ <b>TRADER_{moneda}</b>: Sin operaciones en los últimos 30 días\n\n"
+    
+    enviar_telegram(mensaje_telegram)
+    return "Resumen enviado a Telegram"
 
 # Rutas
 @app.route("/")
