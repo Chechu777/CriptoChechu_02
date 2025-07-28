@@ -27,10 +27,13 @@ TRADERS = {
 # Configuración de headers para evitar bloqueos
 BINANCE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3",
+    "Accept-Language": "es-ES,es;q=0.9",
     "Referer": "https://www.binance.com/",
-    "DNT": "1"
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
 }
 
 # ========== FUNCIONES PRINCIPALES ==========
@@ -106,86 +109,83 @@ def generar_resumen_criptos():
     return True
 
 # ========== FUNCIONES DE TRADERS ==========
-def obtener_info_trader(trader_uid, moneda):
-    """Obtiene información básica del trader usando múltiples métodos"""
-    if not trader_uid:
-        return None
-    
-    # 1. Intento con API alternativa de Binance
-    try:
-        endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherLeaderboardBaseInfo"
-        params = {"encryptedUid": trader_uid}
-        response = requests.get(endpoint, params=params, headers=BINANCE_HEADERS, timeout=10)
-        data = response.json()
-        
-        if data.get("data"):
-            return {
-                "moneda": moneda,
-                "nombre": data["data"].get("nickName", "Trader"),
-                "pnl_7d": data["data"].get("pnl7Day", 0),
-                "ultima_operacion": datetime.fromtimestamp(data["data"]["lastTradeTime"]/1000) if data["data"]["lastTradeTime"] else None,
-                "origen": "api_alternativa"
-            }
-    except Exception as e:
-        print(f"Error API alternativa: {str(e)}")
+from bs4 import BeautifulSoup
+import re
 
-    # 2. Web scraping mejorado
+def obtener_historial_trader(trader_uid, moneda):
+    """Obtiene el historial de trades de un trader usando web scraping"""
     try:
         url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}"
-        response = requests.get(url, headers=BINANCE_HEADERS, timeout=10)
+        response = requests.get(url, headers=BINANCE_HEADERS, timeout=15)
+        response.raise_for_status()
         
-        # Extraemos datos básicos del HTML
-        from bs4 import BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
+        historial = []
         
-        info = {
-            "moneda": moneda,
-            "origen": "web_scraping"
-        }
+        # Buscar la sección de historial de trades
+        history_section = soup.find('div', {'class': 'history-table'})
         
-        # Extraer nombre del trader
-        nombre_tag = soup.find('h1', {'class': 'name'})
-        if nombre_tag:
-            info["nombre"] = nombre_tag.get_text(strip=True)
+        if history_section:
+            # Extraer filas de la tabla de historial
+            rows = history_section.find_all('div', {'class': 'history-row'})[:5]  # Últimos 5 trades
+            
+            for row in rows:
+                try:
+                    # Extraer datos de cada trade
+                    fecha = row.find('div', {'class': 'history-cell-date'}).get_text(strip=True)
+                    simbolo = row.find('div', {'class': 'history-cell-symbol'}).get_text(strip=True)
+                    direccion = row.find('div', {'class': 'history-cell-side'}).get_text(strip=True)
+                    precio = row.find('div', {'class': 'history-cell-price'}).get_text(strip=True)
+                    
+                    if moneda in simbolo:
+                        historial.append({
+                            'fecha': parsear_fecha(fecha),
+                            'moneda': moneda,
+                            'direccion': "COMPRA" if "LONG" in direccion.upper() else "VENTA",
+                            'precio': float(precio.replace('$', '').replace(',', ''))
+                        })
+                except Exception as e:
+                    print(f"Error procesando fila: {str(e)}")
         
-        # Extraer PNL
-        pnl_tag = soup.find('div', {'class': 'profit-rate'})
-        if pnl_tag:
-            info["pnl_7d"] = pnl_tag.get_text(strip=True)
+        return historial if historial else None
         
-        return info
     except Exception as e:
-        print(f"Error scraping: {str(e)}")
-    
-    return None
+        print(f"Error en scraping de historial: {str(e)}")
+        return None
+
+def parsear_fecha(fecha_str):
+    """Convierte la fecha de Binance a objeto datetime"""
+    try:
+        # Ejemplo: "2023-07-28 14:30:45"
+        return datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
+    except:
+        return datetime.now()
 
 def generar_resumen_traders():
-    mensaje = "<b>📊 Información de Traders</b>\n\n"
+    mensaje = "<b>📊 Historial Reciente de Traders</b>\n\n"
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
             continue
             
-        datos = obtener_info_trader(trader_uid, moneda)
-        if datos:
-            mensaje += f"<b>➡️ TRADER_{moneda}</b>\n"
-            mensaje += f"👤 Nombre: {datos.get('nombre', 'No disponible')}\n"
-            
-            if datos.get('ultima_operacion'):
-                mensaje += f"⏰ Última operación: {datos['ultima_operacion'].strftime('%d/%m %H:%M')}\n"
-            
-            if datos.get('pnl_7d'):
-                pnl = float(datos['pnl_7d']) if isinstance(datos['pnl_7d'], (int, float)) else datos['pnl_7d']
-                mensaje += f"📈 PNL (7 días): {pnl}\n"
-            
-            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver perfil completo</a>\n\n"
+        mensaje += f"<b>➡️ TRADER_{moneda}</b>\n"
+        
+        # Obtener historial reciente
+        historial = obtener_historial_trader(trader_uid, moneda)
+        
+        if historial:
+            for trade in historial[:3]:  # Mostrar solo los 3 más recientes
+                mensaje += (
+                    f"• {trade['direccion']} {trade['moneda']} a {trade['precio']:.2f} $\n"
+                    f"  ⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n"
+                )
         else:
-            mensaje += f"⚠️ <b>TRADER_{moneda}</b>: Información limitada\n"
-            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
+            mensaje += "• No se pudo obtener historial reciente\n"
+        
+        mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver todo el historial</a>\n\n"
     
-    mensaje += "ℹ️ <i>Para ver operaciones detalladas, consulta los enlaces directamente en Binance</i>"
     enviar_telegram(mensaje)
-
+    
 # ========== RUTAS ==========
 
 @app.route("/")
