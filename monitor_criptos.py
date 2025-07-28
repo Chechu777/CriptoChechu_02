@@ -6,7 +6,7 @@ from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import random
 
-# ================ CONFIGURACIÓN ================ 
+# Configuración
 app = Flask(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -24,7 +24,14 @@ TRADERS = {
     "ADA": os.getenv("TRADER_ADA")
 }
 
-# ================ Funciones auxiliares ================
+# Configuración de headers para evitar bloqueos
+BINANCE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.binance.com/"
+}
+
+# Funciones auxiliares
 def obtener_precios():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
@@ -95,114 +102,55 @@ def generar_resumen_criptos():
     enviar_telegram(resumen)
     return True
 
-# ============== FUNCIONES DE TRADERS ==============
-def obtener_datos_trader(trader_uid, moneda):
-    if not trader_uid:
-        return None
-    
-    # 1. Primero intentamos con la API de rendimiento
+def obtener_datos_trader_web(trader_uid, moneda):
+    """Alternativa scraping para cuando falla la API"""
     try:
-        endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPerformance"
-        params = {
-            "encryptedUid": trader_uid,
-            "tradeType": "PERPETUAL",
-            "statisticsType": "ALL"
-        }
-        response = requests.post(endpoint, json=params)
+        url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}?timeRange=7D"
+        response = requests.get(url, headers=BINANCE_HEADERS)
         response.raise_for_status()
-        data = response.json()
         
-        if data and data.get("data"):
-            for trade in data["data"]:
-                if trade.get("symbol") == f"{moneda}USDT":
-                    return {
-                        "moneda": moneda,
-                        "precio": float(trade["entryPrice"]),
-                        "direccion": "LONG (Compra)" if float(trade["amount"]) > 0 else "SHORT (Venta)",
-                        "fecha": datetime.fromtimestamp(trade["updateTime"]/1000),
-                        "pnl": float(trade.get("pnl", 0)),
-                        "origen": "performance"
-                    }
-    except Exception as e:
-        print(f"Error API performance: {str(e)}")
-
-    # 2. Si falla, intentamos con la API de información básica
-    try:
-        endpoint = f"https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherLeaderboardBaseInfo?encryptedUid={trader_uid}"
-        response = requests.get(endpoint)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data and data.get("data"):
+        # Aquí deberías parsear el HTML para extraer los datos
+        # Esto es un ejemplo básico, necesitarías ajustarlo
+        if "Última operación" in response.text:
             return {
                 "moneda": moneda,
                 "precio": None,
-                "direccion": "Última operación",
-                "fecha": datetime.fromtimestamp(data["data"]["lastTradeTime"]/1000) if data["data"]["lastTradeTime"] else None,
-                "pnl": float(data["data"].get("totalPnl", 0)),
-                "origen": "base_info"
+                "direccion": "Datos en página web",
+                "fecha": datetime.now(),
+                "origen": "web_scraping"
             }
     except Exception as e:
-        print(f"Error API base info: {str(e)}")
-    
+        print(f"Error en scraping web: {str(e)}")
     return None
 
 def generar_resumen_traders():
     mensaje = "<b>📊 Actividad Reciente de Traders</b>\n\n"
-    resultados = []
+    traders_con_datos = False
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
             continue
             
+        # Primero intentamos con la API
         datos = obtener_datos_trader(trader_uid, moneda)
+        
+        # Si falla, intentamos con scraping web
+        if not datos:
+            datos = obtener_datos_trader_web(trader_uid, moneda)
+        
         if datos:
-            trade_msg = f"<b>➡️ TRADER_{moneda}</b>\n"
-            
-            if datos["origen"] == "performance":
-                trade_msg += f"• Operación: {datos['direccion']}\n"
-                trade_msg += f"• Precio: {datos['precio']:.2f} €\n"
-                trade_msg += f"• Fecha: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
-                trade_msg += f"• PnL: {datos['pnl']:.2f} €\n"
-            elif datos["fecha"]:
-                trade_msg += f"• Última operación: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
-            
-            trade_msg += f"• <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n"
-            resultados.append((datos["fecha"] or datetime.min, trade_msg))
-            
-            # Guardar en Supabase solo si tenemos datos completos
-            if datos["precio"]:
-                try:
-                    supabase.table("trades_historico").insert({
-                        "trader_uid": trader_uid,
-                        "moneda": moneda,
-                        "direccion": datos["direccion"].split(" ")[0],
-                        "precio_entrada": datos["precio"],
-                        "fecha_apertura": datos["fecha"].isoformat(),
-                        "estado": "ACTIVO"
-                    }).execute()
-                except Exception as e:
-                    print(f"Error al guardar trade en Supabase: {str(e)}")
+            traders_con_datos = True
+            mensaje += f"📊 <b>TRADER_{moneda}</b>\n"
+            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
         else:
-            resultados.append((datetime.min, f"<b>➡️ TRADER_{moneda}</b>\n• No se obtuvieron datos\n"))
-
-    # Ordenar por fecha (más reciente primero)
-    resultados.sort(key=lambda x: x[0], reverse=True)
+            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
     
-    if any(datos[0] != datetime.min for datos in resultados):
-        mensaje += "\n".join([msg for _, msg in resultados])
-        mensaje += "\nℹ️ <i>Algunos datos pueden estar limitados por Binance</i>"
-    else:
-        mensaje += "No se pudo obtener información reciente de ningún trader.\n\n"
-        mensaje += "<b>Posibles causas:</b>\n"
-        mensaje += "1. Los traders no han operado recientemente\n"
-        mensaje += "2. Perfiles configurados como privados\n"
-        mensaje += "3. Limitaciones de la API de Binance\n\n"
-        mensaje += "🔍 Verifica manualmente los enlaces en Binance"
-
+    if not traders_con_datos:
+        mensaje += "ℹ️ <i>Los datos de traders solo están disponibles consultando manualmente los enlaces</i>"
+    
     enviar_telegram(mensaje)
 
-# ================ RUTAS ================
+# Rutas
 @app.route("/")
 def home():
     return "OK"
@@ -217,8 +165,7 @@ def resumen():
 @app.route("/traders")
 def traders():
     generar_resumen_traders()
-    return "<h1>Resumen de traders enviado 📊</h1>"
+    return "<h1>Resumen de traders enviado 📊</h1><p>Consulta Telegram para los detalles</p>"
 
-# ================ EJECUCIÓN ================
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000)
