@@ -104,88 +104,84 @@ def generar_resumen_criptos():
     return True
 
 # ========== FUNCIONES DE TRADERS ==========
-
-def obtener_datos_trader(trader_uid, moneda):
-    """Función principal para obtener datos de traders"""
+def obtener_info_trader(trader_uid, moneda):
+    """Obtiene información básica del trader usando múltiples métodos"""
     if not trader_uid:
         return None
     
-    # Primero intentamos con la API pública
+    # 1. Intento con API alternativa de Binance
     try:
-        endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
-        params = {"encryptedUid": trader_uid, "tradeType": "PERPETUAL"}
-        response = requests.post(endpoint, json=params, headers=BINANCE_HEADERS)
-        response.raise_for_status()
+        endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherLeaderboardBaseInfo"
+        params = {"encryptedUid": trader_uid}
+        response = requests.get(endpoint, params=params, headers=BINANCE_HEADERS, timeout=10)
         data = response.json()
         
         if data.get("data"):
-            for posicion in data["data"]:
-                if posicion["symbol"] == f"{moneda}USDT":
-                    return {
-                        "moneda": moneda,
-                        "precio": float(posicion["entryPrice"]),
-                        "direccion": "LONG (Compra)" if float(posicion["amount"]) > 0 else "SHORT (Venta)",
-                        "fecha": datetime.fromtimestamp(posicion["updateTime"]/1000),
-                        "origen": "api_publica"
-                    }
-    except Exception as e:
-        print(f"Error al obtener datos del trader (API pública): {str(e)}")
-    
-    # Si falla, intentamos con scraping web
-    return obtener_datos_trader_web(trader_uid, moneda)
-
-def obtener_datos_trader_web(trader_uid, moneda):
-    """Alternativa cuando falla la API"""
-    try:
-        url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}"
-        response = requests.get(url, headers=BINANCE_HEADERS)
-        response.raise_for_status()
-        
-        # Extraer información básica de la página
-        if "Última operación" in response.text:
             return {
                 "moneda": moneda,
-                "precio": None,
-                "direccion": "Ver en Binance",
-                "fecha": datetime.now(),
-                "origen": "web_scraping"
+                "nombre": data["data"].get("nickName", "Trader"),
+                "pnl_7d": data["data"].get("pnl7Day", 0),
+                "ultima_operacion": datetime.fromtimestamp(data["data"]["lastTradeTime"]/1000) if data["data"]["lastTradeTime"] else None,
+                "origen": "api_alternativa"
             }
     except Exception as e:
-        print(f"Error en scraping web: {str(e)}")
+        print(f"Error API alternativa: {str(e)}")
+
+    # 2. Web scraping mejorado
+    try:
+        url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}"
+        response = requests.get(url, headers=BINANCE_HEADERS, timeout=10)
+        
+        # Extraemos datos básicos del HTML
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        info = {
+            "moneda": moneda,
+            "origen": "web_scraping"
+        }
+        
+        # Extraer nombre del trader
+        nombre_tag = soup.find('h1', {'class': 'name'})
+        if nombre_tag:
+            info["nombre"] = nombre_tag.get_text(strip=True)
+        
+        # Extraer PNL
+        pnl_tag = soup.find('div', {'class': 'profit-rate'})
+        if pnl_tag:
+            info["pnl_7d"] = pnl_tag.get_text(strip=True)
+        
+        return info
+    except Exception as e:
+        print(f"Error scraping: {str(e)}")
+    
     return None
 
 def generar_resumen_traders():
-    mensaje = "<b>🔍 Resumen de Traders</b>\n\n"
-    traders_con_datos = False
+    mensaje = "<b>📊 Información de Traders</b>\n\n"
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
             continue
             
-        datos = obtener_datos_trader(trader_uid, moneda)
+        datos = obtener_info_trader(trader_uid, moneda)
         if datos:
-            traders_con_datos = True
-            mensaje += f"📊 <b>TRADER_{moneda}</b>\n"
+            mensaje += f"<b>➡️ TRADER_{moneda}</b>\n"
+            mensaje += f"👤 Nombre: {datos.get('nombre', 'No disponible')}\n"
             
-            if datos["origen"] == "api_publica":
-                mensaje += f"• Operación: {datos['direccion']}\n"
-                if datos["precio"]:
-                    mensaje += f"• Precio: {datos['precio']:.2f} €\n"
-                mensaje += f"• Fecha: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
-            else:
-                mensaje += "• Datos limitados (ver en Binance)\n"
+            if datos.get('ultima_operacion'):
+                mensaje += f"⏰ Última operación: {datos['ultima_operacion'].strftime('%d/%m %H:%M')}\n"
             
-            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver detalles en Binance</a>\n\n"
+            if datos.get('pnl_7d'):
+                pnl = float(datos['pnl_7d']) if isinstance(datos['pnl_7d'], (int, float)) else datos['pnl_7d']
+                mensaje += f"📈 PNL (7 días): {pnl}\n"
+            
+            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver perfil completo</a>\n\n"
         else:
-            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
+            mensaje += f"⚠️ <b>TRADER_{moneda}</b>: Información limitada\n"
+            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
     
-    if not traders_con_datos:
-        mensaje += "ℹ️ No se encontraron datos de traders. Posibles razones:\n"
-        mensaje += "- Perfiles privados\n"
-        mensaje += "- Restricciones de Binance\n"
-        mensaje += "- El trader no ha operado recientemente\n\n"
-        mensaje += "Puedes verificar manualmente los enlaces proporcionados."
-    
+    mensaje += "ℹ️ <i>Para ver operaciones detalladas, consulta los enlaces directamente en Binance</i>"
     enviar_telegram(mensaje)
 
 # ========== RUTAS ==========
