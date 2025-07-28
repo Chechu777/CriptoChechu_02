@@ -170,20 +170,25 @@ def generar_resumen_traders():
             
         mensaje += f"<b>➡️ TRADER_{moneda}</b>\n"
         
-        # Obtener historial reciente
+        # Intentar con proxy primero
         historial = obtener_historial_trader(trader_uid, moneda)
         
+        # Si falla, intentar sin proxy
+        if not historial and os.getenv("SCRAPER_API_KEY"):
+            historial = obtener_historial_trader_fallback(trader_uid, moneda)
+        
         if historial:
-            for trade in historial[:3]:  # Mostrar solo los 3 más recientes
+            for trade in historial[:3]:  # Mostrar solo 3 trades más recientes
                 mensaje += (
                     f"• {trade['direccion']} {trade['moneda']} a {trade['precio']:.2f} $\n"
                     f"  ⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n"
                 )
         else:
-            mensaje += "• No se pudo obtener historial reciente\n"
+            mensaje += "• No se pudo obtener historial automáticamente\n"
         
-        mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver todo el historial</a>\n\n"
+        mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver historial completo</a>\n\n"
     
+    mensaje += "ℹ️ Los datos pueden estar limitados por Binance"
     enviar_telegram(mensaje)
     
 # ========== RUTAS ==========
