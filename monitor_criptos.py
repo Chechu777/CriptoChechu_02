@@ -29,14 +29,20 @@ def obtener_precios():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
-    r = requests.get(url, headers=headers, params=params)
-    data = r.json()["data"]
-    precios = {}
-    for m in MONEDAS:
-        raw = data[m]["quote"]["EUR"]["price"]
-        precio = round(raw, 8)
-        precios[m] = precio
-    return precios
+    
+    try:
+        r = requests.get(url, headers=headers, params=params)
+        r.raise_for_status()
+        data = r.json()["data"]
+        precios = {}
+        for m in MONEDAS:
+            raw = data[m]["quote"]["EUR"]["price"]
+            precio = round(raw, 8)
+            precios[m] = precio
+        return precios
+    except Exception as e:
+        print(f"Error al obtener precios: {str(e)}")
+        return None
 
 def obtener_rsi(moneda):
     return round(random.uniform(30, 70), 2)
@@ -50,85 +56,100 @@ def consejo_rsi(rsi):
         return "🟡 Quieto chato, no hagas huevadas"
 
 def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
-    requests.post(url, data=data)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Error al enviar mensaje a Telegram: {str(e)}")
 
 def insertar_en_supabase(nombre, precio, rsi, fecha):
-    supabase.table("precios").insert({
-        "nombre": nombre,
-        "precio": precio,
-        "rsi": rsi,
-        "fecha": fecha.isoformat()
-    }).execute()
+    try:
+        supabase.table("precios").insert({
+            "nombre": nombre,
+            "precio": precio,
+            "rsi": rsi,
+            "fecha": fecha.isoformat()
+        }).execute()
+    except Exception as e:
+        print(f"Error al insertar en Supabase: {str(e)}")
 
-# ==============VER_TRADERS=================
+def generar_resumen_criptos():
+    precios = obtener_precios()
+    if not precios:
+        enviar_telegram("⚠️ No se pudieron obtener los precios de las criptomonedas")
+        return False
+    
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
+
+    for m in MONEDAS:
+        precio = precios[m]
+        rsi = obtener_rsi(m)
+        insertar_en_supabase(m, precio, rsi, ahora)
+        consejo = consejo_rsi(rsi)
+        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
+
+    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
+    enviar_telegram(resumen)
+    return True
+
+# ============== FUNCIONES DE TRADERS ==============
 def obtener_datos_trader(trader_uid, moneda):
     if not trader_uid:
         return None
     
-    # Primero intentamos con el endpoint de posiciones actuales
-    try:
-        endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
-        params = {"encryptedUid": trader_uid, "tradeType": "PERPETUAL"}
-        response = requests.post(endpoint, json=params)
-        data = response.json()
-        
-        if data.get("data"):
-            for posicion in data["data"]:
-                if posicion["symbol"] == f"{moneda}USDT":
-                    return {
-                        "moneda": moneda,
-                        "precio": float(posicion["entryPrice"]),
-                        "direccion": "LONG (Compra)" if float(posicion["amount"]) > 0 else "SHORT (Venta)",
-                        "fecha": datetime.fromtimestamp(posicion["updateTime"]/1000),
-                        "origen": "posicion_actual"
-                    }
-    except Exception as e:
-        print(f"Error en endpoint posiciones: {str(e)}")
-
-    # Si no hay datos, intentamos con el endpoint de performance
+    # 1. Primero intentamos con la API de rendimiento
     try:
         endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPerformance"
-        params = {"encryptedUid": trader_uid, "tradeType": "PERPETUAL"}
+        params = {
+            "encryptedUid": trader_uid,
+            "tradeType": "PERPETUAL",
+            "statisticsType": "ALL"
+        }
         response = requests.post(endpoint, json=params)
+        response.raise_for_status()
         data = response.json()
         
-        if data.get("data"):
+        if data and data.get("data"):
             for trade in data["data"]:
-                if trade["symbol"] == f"{moneda}USDT":
+                if trade.get("symbol") == f"{moneda}USDT":
                     return {
                         "moneda": moneda,
                         "precio": float(trade["entryPrice"]),
-                        "direccion": "LONG (Compra)" if trade["amount"] > 0 else "SHORT (Venta)",
+                        "direccion": "LONG (Compra)" if float(trade["amount"]) > 0 else "SHORT (Venta)",
                         "fecha": datetime.fromtimestamp(trade["updateTime"]/1000),
+                        "pnl": float(trade.get("pnl", 0)),
                         "origen": "performance"
                     }
     except Exception as e:
-        print(f"Error en endpoint performance: {str(e)}")
+        print(f"Error API performance: {str(e)}")
 
-    # Último intento con endpoint de estadísticas
+    # 2. Si falla, intentamos con la API de información básica
     try:
         endpoint = f"https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherLeaderboardBaseInfo?encryptedUid={trader_uid}"
         response = requests.get(endpoint)
+        response.raise_for_status()
         data = response.json()
         
-        if data.get("data"):
+        if data and data.get("data"):
             return {
                 "moneda": moneda,
                 "precio": None,
                 "direccion": "Última operación",
                 "fecha": datetime.fromtimestamp(data["data"]["lastTradeTime"]/1000) if data["data"]["lastTradeTime"] else None,
-                "origen": "estadisticas"
+                "pnl": float(data["data"].get("totalPnl", 0)),
+                "origen": "base_info"
             }
     except Exception as e:
-        print(f"Error en endpoint estadísticas: {str(e)}")
+        print(f"Error API base info: {str(e)}")
     
     return None
-# ==================
+
 def generar_resumen_traders():
-    mensaje = "<b>🔍 Resumen de Actividad de Traders</b>\n\n"
-    traders_con_datos = False
+    mensaje = "<b>📊 Actividad Reciente de Traders</b>\n\n"
+    resultados = []
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
@@ -136,54 +157,68 @@ def generar_resumen_traders():
             
         datos = obtener_datos_trader(trader_uid, moneda)
         if datos:
-            traders_con_datos = True
-            mensaje += f"📊 <b>TRADER_{moneda}</b>\n"
+            trade_msg = f"<b>➡️ TRADER_{moneda}</b>\n"
             
-            if datos["origen"] == "estadisticas" and datos["fecha"]:
-                mensaje += f"⏰ Última operación: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
-            elif datos["precio"]:
-                mensaje += f"💵 {datos['direccion']} a {datos['precio']:.2f} €\n"
-                mensaje += f"⏰ {datos['fecha'].strftime('%d/%m %H:%M')}\n"
+            if datos["origen"] == "performance":
+                trade_msg += f"• Operación: {datos['direccion']}\n"
+                trade_msg += f"• Precio: {datos['precio']:.2f} €\n"
+                trade_msg += f"• Fecha: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
+                trade_msg += f"• PnL: {datos['pnl']:.2f} €\n"
+            elif datos["fecha"]:
+                trade_msg += f"• Última operación: {datos['fecha'].strftime('%d/%m %H:%M')}\n"
             
-            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
+            trade_msg += f"• <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n"
+            resultados.append((datos["fecha"] or datetime.min, trade_msg))
             
             # Guardar en Supabase solo si tenemos datos completos
             if datos["precio"]:
-                supabase.table("trades_historico").insert({
-                    "trader_uid": trader_uid,
-                    "moneda": moneda,
-                    "direccion": datos["direccion"].split(" ")[0],
-                    "precio_entrada": datos["precio"],
-                    "fecha_apertura": datos["fecha"].isoformat(),
-                    "estado": "ACTIVO"
-                }).execute()
+                try:
+                    supabase.table("trades_historico").insert({
+                        "trader_uid": trader_uid,
+                        "moneda": moneda,
+                        "direccion": datos["direccion"].split(" ")[0],
+                        "precio_entrada": datos["precio"],
+                        "fecha_apertura": datos["fecha"].isoformat(),
+                        "estado": "ACTIVO"
+                    }).execute()
+                except Exception as e:
+                    print(f"Error al guardar trade en Supabase: {str(e)}")
         else:
-            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
+            resultados.append((datetime.min, f"<b>➡️ TRADER_{moneda}</b>\n• No se obtuvieron datos\n"))
+
+    # Ordenar por fecha (más reciente primero)
+    resultados.sort(key=lambda x: x[0], reverse=True)
     
-    if not traders_con_datos:
-        mensaje = "⚠️ No se encontraron datos recientes de los traders\n\n"
-        mensaje += "Posibles razones:\n"
-        mensaje += "- El trader no ha operado recientemente\n"
-        mensaje += "- El perfil es privado\n"
-        mensaje += "- Binance limita los datos públicos\n"
-    
+    if any(datos[0] != datetime.min for datos in resultados):
+        mensaje += "\n".join([msg for _, msg in resultados])
+        mensaje += "\nℹ️ <i>Algunos datos pueden estar limitados por Binance</i>"
+    else:
+        mensaje += "No se pudo obtener información reciente de ningún trader.\n\n"
+        mensaje += "<b>Posibles causas:</b>\n"
+        mensaje += "1. Los traders no han operado recientemente\n"
+        mensaje += "2. Perfiles configurados como privados\n"
+        mensaje += "3. Limitaciones de la API de Binance\n\n"
+        mensaje += "🔍 Verifica manualmente los enlaces en Binance"
+
     enviar_telegram(mensaje)
-# ===============================
-# Rutas
+
+# ================ RUTAS ================
 @app.route("/")
 def home():
     return "OK"
 
 @app.route("/resumen")
 def resumen():
-    generar_y_enviar_resumen()
-    return "<h1>Resumen enviado a Telegram 📢</h1>"
+    if generar_resumen_criptos():
+        return "<h1>Resumen enviado a Telegram 📢</h1><p>Precios y RSI actualizados</p>"
+    else:
+        return "<h1>Error al generar resumen</h1><p>Verifica los logs para más información</p>"
 
 @app.route("/traders")
 def traders():
     generar_resumen_traders()
     return "<h1>Resumen de traders enviado 📊</h1>"
 
-# Ejecutar
+# ================ EJECUCIÓN ================
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000)
