@@ -107,17 +107,6 @@ def formato_numero(n):
     else:
         return f"{n:,.2f}"
 
-def enviar_alerta(moneda, precio, cambio_24h, volumen_24h, rsi):
-    if precio is None or rsi is None:
-        return
-    texto = (
-        f"\n*{moneda}*: {formato_numero(precio)} €\n"
-        f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
-        f"📊 Volumen 24h: {formato_numero(volumen_24h)} €\n"
-        f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
-    )
-    Bot(token=TELEGRAM_TOKEN).send_message(chat_id=TELEGRAM_CHAT_ID, text=texto, parse_mode="Markdown")
-
 def generar_y_enviar_resumen():
     resumen = []
     ahora = datetime.utcnow()
@@ -131,7 +120,6 @@ def generar_y_enviar_resumen():
 
         if precio is not None:
             insertar_en_supabase(simbolo, precio, rsi, cambio_24h, volumen_24h, ahora)
-            enviar_alerta(simbolo, precio, cambio_24h, volumen_24h, rsi)
             resumen.append(
                 f"{simbolo}: {formato_numero(precio)} €\n"
                 f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
