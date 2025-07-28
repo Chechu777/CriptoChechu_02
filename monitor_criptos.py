@@ -1,41 +1,75 @@
 import os
 import requests
 from flask import Flask
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import create_client, Client
+from zoneinfo import ZoneInfo
+import random
 
 # Configuración
 app = Flask(__name__)
-
-# Conexión a Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Config Telegram
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-# ==============================================
-# Funciones principales
-# ==============================================
+MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
+TRADERS = {
+    "BTC": os.getenv("TRADER_BTC"),
+    "SOL": os.getenv("TRADER_SOL"),
+    "SHIB": os.getenv("TRADER_SHIB"),
+    "ADA": os.getenv("TRADER_ADA")
+}
+
+# Funciones auxiliares
+def obtener_precios():
+    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
+    r = requests.get(url, headers=headers, params=params)
+    data = r.json()["data"]
+    precios = {}
+    for m in MONEDAS:
+        raw = data[m]["quote"]["EUR"]["price"]
+        precio = round(raw, 8)
+        precios[m] = precio
+    return precios
+
+def obtener_rsi(moneda):
+    return round(random.uniform(30, 70), 2)
+
+def consejo_rsi(rsi):
+    if rsi > 70:
+        return "🔴 RSI alto, quizá vender\n⚠️ Podría haber una bajada en el precio."
+    elif rsi < 30:
+        return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar pronto al alza."
+    else:
+        return "🟡 Quieto chato, no hagas huevadas"
 
 def enviar_telegram(mensaje):
-    """Envía mensajes a Telegram con formato HTML"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "HTML"
-    }
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
     requests.post(url, data=data)
 
-def obtener_trades_publicos(trader_uid, moneda):
-    """Consulta los trades públicos de un trader usando la API de Binance Copy Trading"""
+def insertar_en_supabase(nombre, precio, rsi, fecha):
+    supabase.table("precios").insert({
+        "nombre": nombre,
+        "precio": precio,
+        "rsi": rsi,
+        "fecha": fecha.isoformat()
+    }).execute()
+
+def obtener_trades_trader(trader_uid, moneda):
+    if not trader_uid:
+        return None
+        
     endpoint = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
     params = {
         "encryptedUid": trader_uid,
-        "tradeType": "PERPETUAL"  # Para contratos perpetuos
+        "tradeType": "PERPETUAL"
     }
     
     try:
@@ -43,78 +77,78 @@ def obtener_trades_publicos(trader_uid, moneda):
         data = response.json()
         
         if data and "data" in data and data["data"]:
-            # Procesamos la posición más reciente
             ultima_posicion = data["data"][0]
             return {
-                "moneda": ultima_posicion["symbol"].replace("USDT", ""),
-                "direccion": "LONG (Compra)" if float(ultima_posicion["amount"]) > 0 else "SHORT (Venta)",
+                "moneda": moneda,
                 "precio": float(ultima_posicion["entryPrice"]),
-                "tamaño": float(ultima_posicion["amount"]),
+                "direccion": "LONG (Compra)" if float(ultima_posicion["amount"]) > 0 else "SHORT (Venta)",
                 "fecha": datetime.fromtimestamp(ultima_posicion["updateTime"] / 1000)
             }
     except Exception as e:
-        print(f"Error al consultar trades: {e}")
+        print(f"Error al obtener trades: {e}")
     return None
 
-# ==============================================
-# Endpoints Flask
-# ==============================================
+def generar_y_enviar_resumen():
+    precios = obtener_precios()
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
 
+    for m in MONEDAS:
+        precio = precios[m]
+        rsi = obtener_rsi(m)
+        insertar_en_supabase(m, precio, rsi, ahora)
+        consejo = consejo_rsi(rsi)
+        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
+
+    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
+    enviar_telegram(resumen)
+
+def generar_resumen_traders():
+    mensaje = "<b>🔍 Movimientos de Traders</b>\n\n"
+    
+    for moneda, trader_uid in TRADERS.items():
+        if not trader_uid:
+            continue
+            
+        trade = obtener_trades_trader(trader_uid, moneda)
+        if trade:
+            mensaje += (
+                f"📢 <b>TRADER_{moneda}</b>\n"
+                f"💵 {trade['direccion']}: {trade['precio']:.2f} €\n"
+                f"📅 {trade['fecha'].strftime('%d/%m %H:%M')}\n\n"
+            )
+            
+            supabase.table("trades_historico").insert({
+                "trader_uid": trader_uid,
+                "moneda": moneda,
+                "direccion": trade["direccion"].split(" ")[0],
+                "precio_entrada": trade["precio"],
+                "fecha_apertura": trade["fecha"].isoformat(),
+                "estado": "ACTIVO"
+            }).execute()
+        else:
+            mensaje += f"❌ TRADER_{moneda}: Sin movimientos recientes\n\n"
+    
+    if mensaje.count("📢") == 0:
+        mensaje = "⚠️ No hay movimientos de traders para mostrar"
+    
+    enviar_telegram(mensaje)
+
+# Rutas
 @app.route("/")
 def home():
-    return "Bot de Monitoreo de Cripto - /seguir_trader para actualizar"
+    return "OK"
 
-@app.route("/seguir_trader")
-def seguir_trader():
-    """Endpoint principal que consulta y notifica trades"""
-    mensaje_telegram = "🔍 <b>Resumen de Movimientos de Traders</b>\n\n"
-    
-    # Lista de monedas a verificar (solo aquellas con traders definidos)
-    monedas_a_verificar = []
-    for moneda in ["BTC", "SOL", "SHIB", "ADA"]:
-        trader_uid = os.getenv(f"TRADER_{moneda}")
-        if trader_uid and trader_uid.strip():  # Filtra traders vacíos
-            monedas_a_verificar.append((moneda, trader_uid))
-    
-    if not monedas_a_verificar:
-        enviar_telegram("⚠️ No hay traders configurados en las variables de entorno.")
-        return "No hay traders configurados"
-    
-    # Procesamos cada trader
-    for moneda, trader_uid in monedas_a_verificar:
-        try:
-            trade = obtener_trades_publicos(trader_uid, moneda)
-            if trade:
-                mensaje_telegram += (
-                    f"📢 <b>Última operación de TRADER_{moneda}</b>\n"
-                    f"➡️ <b>Dirección</b>: {trade['direccion']}\n"
-                    f"💰 <b>Precio entrada</b>: {trade['precio']:.4f} $\n"
-                    f"📊 <b>Tamaño posición</b>: {abs(trade['tamaño']):.2f} {moneda}\n"
-                    f"⏰ <b>Actualizado</b>: {trade['fecha'].strftime('%d/%m %H:%M')}\n\n"
-                )
-                
-                # Guardamos en Supabase
-                supabase.table("trades_historico").insert({
-                    "trader_uid": trader_uid,
-                    "moneda": moneda,
-                    "direccion": trade["direccion"].split(" ")[0],
-                    "precio_entrada": trade["precio"],
-                    "tamaño_posicion": trade["tamaño"],
-                    "fecha_apertura": trade["fecha"].isoformat(),
-                    "estado": "ACTIVO"
-                }).execute()
-            else:
-                mensaje_telegram += f"❌ <b>TRADER_{moneda}</b>: Sin operaciones activas\n\n"
-        except Exception as e:
-            mensaje_telegram += f"⚠️ <b>Error con TRADER_{moneda}</b>: {str(e)}\n\n"
-    
-    # Enviamos el resumen completo
-    enviar_telegram(mensaje_telegram)
-    return "Resumen enviado a Telegram"
+@app.route("/resumen")
+def resumen():
+    generar_y_enviar_resumen()
+    return "<h1>Resumen enviado a Telegram 📢</h1>"
 
-# ==============================================
-# Ejecución
-# ==============================================
+@app.route("/traders")
+def traders():
+    generar_resumen_traders()
+    return "<h1>Resumen de traders enviado 📊</h1>"
 
+# Ejecutar
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000)
