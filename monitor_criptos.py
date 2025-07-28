@@ -48,17 +48,21 @@ def obtener_datos_mercado():
 
 def obtener_rsi(moneda, intervalo="1h", periodo=14):
     simbolo = moneda + "EUR"
-    klines = binance_client.get_klines(symbol=simbolo, interval=intervalo, limit=periodo + 1)
-    cierres = [float(k[4]) for k in klines]
-    serie = pd.Series(cierres)
-    delta = serie.diff().dropna()
-    ganancia = delta.where(delta > 0, 0.0)
-    perdida = -delta.where(delta < 0, 0.0)
-    media_gan = ganancia.rolling(window=periodo).mean()
-    media_per = perdida.rolling(window=periodo).mean()
-    rs = media_gan / media_per
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2) if not rsi.empty else None
+    try:
+        klines = binance_client.get_klines(symbol=simbolo, interval=intervalo, limit=periodo + 1)
+        cierres = [float(k[4]) for k in klines]
+        serie = pd.Series(cierres)
+        delta = serie.diff().dropna()
+        ganancia = delta.where(delta > 0, 0.0)
+        perdida = -delta.where(delta < 0, 0.0)
+        media_gan = ganancia.rolling(window=periodo).mean()
+        media_per = perdida.rolling(window=periodo).mean()
+        rs = media_gan / media_per
+        rsi = 100 - (100 / (1 + rs))
+        return round(rsi.iloc[-1], 2) if not rsi.empty else None
+    except Exception as e:
+        print(f"Error al obtener RSI para {moneda}: {str(e)}")
+        return None
 
 # Generar consejo según RSI
 
@@ -71,6 +75,31 @@ def consejo_rsi(rsi):
         return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar."
     else:
         return "🟡 RSI neutro, espera."
+
+# Recomendación de precio objetivo
+
+def recomendacion_precio(nombre, precio, rsi):
+    if rsi is None:
+        return "❓ Sin recomendación por falta de datos."
+    elif rsi < 30:
+        objetivo = round(precio * 1.06, 8)
+        return f"💡 Podrías poner una orden de <b>venta</b> si el precio sube a {objetivo:.8f} €."
+    elif rsi > 70:
+        objetivo = round(precio * 0.94, 8)
+        return f"💡 Podrías poner una orden de <b>compra</b> si el precio baja a {objetivo:.8f} €."
+    else:
+        return "ℹ️ No se recomienda colocar orden especulativa ahora."
+
+# Lógica automatizada de alerta
+
+def alerta_estrategica(nombre, rsi, precio):
+    if rsi is None:
+        return None
+    if rsi < 30:
+        return f"🟢 <b>Señal de COMPRA detectada en {nombre}</b>\nPrecio: {precio} € | RSI: {rsi}"
+    elif rsi > 70:
+        return f"🔴 <b>Señal de VENTA detectada en {nombre}</b>\nPrecio: {precio} € | RSI: {rsi}"
+    return None
 
 # Enviar mensaje a Telegram
 
@@ -111,13 +140,20 @@ def generar_y_enviar_resumen():
         rsi = obtener_rsi(m)
         insertar_en_supabase(m, precio, rsi, ahora)
         consejo = consejo_rsi(rsi)
+        recomendacion = recomendacion_precio(m, precio, rsi)
 
         resumen += (
             f"\n<b>{m}</b>: {precio:,.8f} €\n"
             f"🔄 Cambio 24h: {cambio}%\n"
             f"📊 Volumen: {volumen:,.0f} €\n"
             f"📈 RSI: {rsi} → {consejo}\n"
+            f"{recomendacion}\n"
         )
+
+        # Enviar alerta automatizada si aplica
+        alerta = alerta_estrategica(m, rsi, precio)
+        if alerta:
+            enviar_telegram(alerta)
 
     resumen += f"\n🕒 Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
