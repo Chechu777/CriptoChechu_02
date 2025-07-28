@@ -5,6 +5,7 @@ from datetime import datetime
 from supabase import create_client, Client
 import numpy as np
 from telegram import Bot
+import pytz
 
 # Configuración
 app = Flask(__name__)
@@ -109,7 +110,7 @@ def formato_numero(n):
 
 def generar_y_enviar_resumen():
     resumen = []
-    ahora = datetime.utcnow()
+    ahora = datetime.now(pytz.timezone("Europe/Madrid"))  # Hora de Madrid
 
     for simbolo in monedas:
         precio, cambio_24h, volumen_24h, precios = obtener_datos_completos(simbolo)
@@ -128,8 +129,8 @@ def generar_y_enviar_resumen():
             )
 
     if resumen:
-        mensaje = "📊 *Resumen Cripto Diario*\n\n" + "\n\n".join(resumen)
-        Bot(token=TELEGRAM_TOKEN).send_message(chat_id=TELEGRAM_CHAT_ID, text=mensaje, parse_mode="Markdown")
+        mensaje = "📊 Resumen Cripto Diario\n\n" + "\n\n".join(resumen)
+        Bot(token=TELEGRAM_TOKEN).send_message(chat_id=TELEGRAM_CHAT_ID, text=mensaje)
 
 @app.route("/")
 def inicio():
