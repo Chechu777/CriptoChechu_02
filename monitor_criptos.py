@@ -70,7 +70,7 @@ def calcular_rsi(data, period=14):
     rsi = 100 - (100 / (1 + rs))
     return round(rsi, 2)
 
-def insertar_en_supabase(moneda, precio, rsi, fecha):
+def insertar_en_supabase(moneda, precio, rsi, cambio_24h, volumen_24h, fecha):
     try:
         if rsi is None:
             print(f"RSI nulo para {moneda}, no se insertará en Supabase.")
@@ -79,6 +79,8 @@ def insertar_en_supabase(moneda, precio, rsi, fecha):
             "moneda": moneda,
             "precio": precio,
             "rsi": rsi,
+            "cambio_24h": cambio_24h,
+            "volumen_24h": volumen_24h,
             "fecha": fecha.isoformat()
         }
         respuesta = supabase.table("precios").insert(data).execute()
