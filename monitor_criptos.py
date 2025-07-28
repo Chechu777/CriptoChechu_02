@@ -31,7 +31,8 @@ def obtener_datos_completos(simbolo):
     try:
         moneda_id = monedas[simbolo]
         url_simple = f"{COINGECKO_URL}/simple/price?ids={moneda_id}&vs_currencies=eur&include_24hr_change=true&include_24hr_vol=true"
-        r_simple = requests.get(url_simple)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r_simple = requests.get(url_simple, headers=headers)
         data_simple = r_simple.json()
         if moneda_id not in data_simple:
             print(f"Quieto chato, no hay datos simples para {simbolo}")
@@ -41,7 +42,7 @@ def obtener_datos_completos(simbolo):
         volumen_24h = data_simple[moneda_id].get("eur_24h_vol")
 
         url_chart = f"{COINGECKO_URL}/coins/{moneda_id}/market_chart?vs_currency=eur&days=15&interval=daily"
-        r_chart = requests.get(url_chart)
+        r_chart = requests.get(url_chart, headers=headers)
         data_chart = r_chart.json()
 
         if "prices" not in data_chart:
