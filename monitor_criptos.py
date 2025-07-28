@@ -33,6 +33,7 @@ def obtener_datos_completos(simbolo):
         url_simple = f"{COINGECKO_URL}/simple/price?ids={moneda_id}&vs_currencies=eur&include_24hr_change=true&include_24hr_vol=true"
         headers = {"User-Agent": "Mozilla/5.0"}
         r_simple = requests.get(url_simple, headers=headers)
+        print(f"Respuesta simple para {simbolo}:", r_simple.text) 
         data_simple = r_simple.json()
         if moneda_id not in data_simple:
             print(f"Quieto chato, no hay datos simples para {simbolo}")
