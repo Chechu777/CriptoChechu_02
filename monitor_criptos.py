@@ -25,12 +25,9 @@ monedas = {
 COINGECKO_URL = "https://api.coingecko.com/api/v3"
 
 def obtener_datos_completos(simbolo):
-    """
-    Obtiene precio actual, cambio 24h, volumen 24h y lista de precios para RSI.
-    """
     try:
         moneda_id = monedas[simbolo]
-        url_market = f"{COINGECKO_URL}/coins/{moneda_id}"
+        url_market = f"{COINGECKO_URL}/coins/{moneda_id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false"
         r = requests.get(url_market)
         data = r.json()
 
@@ -43,7 +40,6 @@ def obtener_datos_completos(simbolo):
         cambio_24h = market_data.get("price_change_percentage_24h")
         volumen_24h = market_data.get("total_volume", {}).get("eur")
 
-        # Obtener precios para RSI (últimos 15 días, diario)
         url_chart = f"{COINGECKO_URL}/coins/{moneda_id}/market_chart?vs_currency=eur&days=15&interval=daily"
         r_chart = requests.get(url_chart)
         data_chart = r_chart.json()
