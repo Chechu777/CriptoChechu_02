@@ -85,7 +85,6 @@ def insertar_en_supabase(moneda, precio, rsi, cambio_24h, volumen_24h, fecha):
 
         data = {
             "moneda": moneda,
-            "nombre": moneda,  # <== Añadido este campo para evitar el error
             "precio": precio,
             "rsi": rsi,
             "cambio_24h": cambio_24h,
