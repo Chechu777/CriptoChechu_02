@@ -131,10 +131,16 @@ def generar_y_enviar_resumen():
         if precio is not None:
             insertar_en_supabase(simbolo, precio, rsi, ahora)
             enviar_alerta(simbolo, precio, cambio_24h, volumen_24h, rsi)
-            resumen.append(f"{simbolo}: Precio={formato_numero(precio)} €, RSI={rsi}")
+            resumen.append(
+            f"{simbolo}: {formato_numero(precio)} €\n"
+            f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
+            f"📊 Volumen: {formato_numero(volumen_24h)} €\n"
+            f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
+            )
+
 
     if resumen:
-        mensaje = "\n📊 *Resumen Diario Cripto*\n" + "\n".join(resumen)
+        mensaje = "📊 *Resumen Cripto Diario*\n\n" + "\n\n".join(resumen)
         Bot(token=TELEGRAM_TOKEN).send_message(chat_id=TELEGRAM_CHAT_ID, text=mensaje, parse_mode="Markdown")
 
 @app.route("/")
