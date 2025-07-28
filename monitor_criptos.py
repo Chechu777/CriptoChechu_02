@@ -76,23 +76,23 @@ def calcular_rsi(data, period=14):
 
 def insertar_en_supabase(moneda, precio, rsi, cambio_24h, volumen_24h, fecha):
     try:
-        # Asegurar que está en la zona horaria correcta
         hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
-        
-        # Formatear para Supabase
         fecha_formateada = hora_madrid.strftime('%Y-%m-%d %H:%M:%S.%f')
-        
+
         if rsi is None:
             print(f"RSI nulo para {moneda}, no se insertará en Supabase.")
             return
+
         data = {
             "moneda": moneda,
+            "nombre": moneda,  # <== Añadido este campo para evitar el error
             "precio": precio,
             "rsi": rsi,
             "cambio_24h": cambio_24h,
             "volumen_24h": volumen_24h,
             "fecha": fecha_formateada
         }
+
         respuesta = supabase.table("precios").insert(data).execute()
         if respuesta.data is None:
             raise Exception(respuesta.error)
