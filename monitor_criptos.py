@@ -51,18 +51,15 @@ def enviar_telegram(mensaje):
     requests.post(url, data=data)
 
 def insertar_en_supabase(nombre, precio, rsi, fecha):
-    # Convertir a zona horaria de Madrid si no lo está ya
-    if fecha.tzinfo is None:
-        fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+    # Obtener hora exacta en Madrid
+    hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
     
-    # Convertir a UTC para Supabase (pero manteniendo la información de zona horaria)
-    fecha_utc = fecha.astimezone(pytz.UTC)
-    
+    # Insertar como naive datetime (sin info de timezone)
     supabase.table("precios").insert({
         "nombre": nombre,
         "precio": precio,
         "rsi": rsi,
-        "fecha": fecha_utc.isoformat()  # Esto guardará con offset +00:00 pero sabiendo que viene de Madrid
+        "fecha": hora_madrid.replace(tzinfo=None)  # Elimina info de timezone
     }).execute()
 
 # Y en generar_y_enviar_resumen, modifica la obtención de la hora:
