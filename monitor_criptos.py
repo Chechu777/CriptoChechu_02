@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import random
+from bs4 import BeautifulSoup
 
 # Configuración
 app = Flask(__name__)
@@ -79,6 +80,12 @@ def enviar_telegram(mensaje):
 
 def insertar_en_supabase(nombre, precio, rsi, fecha):
     try:
+        # Asegurar que la fecha tenga la zona horaria correcta
+        if fecha.tzinfo is None:
+            fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+        elif fecha.tzinfo != ZoneInfo("Europe/Madrid"):
+            fecha = fecha.astimezone(ZoneInfo("Europe/Madrid"))
+            
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
@@ -109,93 +116,94 @@ def generar_resumen_criptos():
     return True
 
 # ========== FUNCIONES DE TRADERS ==========
-from bs4 import BeautifulSoup
-import re
 
-def obtener_historial_trader(trader_uid, moneda):
-    """Obtiene el historial de trades de un trader usando web scraping"""
+def obtener_datos_trader(trader_uid, moneda):
+    """Obtiene información básica del trader usando web scraping"""
+    if not trader_uid:
+        return None
+    
     try:
         url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}"
         response = requests.get(url, headers=BINANCE_HEADERS, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        historial = []
+        info = {
+            "moneda": moneda,
+            "origen": "web_scraping"
+        }
         
-        # Buscar la sección de historial de trades
-        history_section = soup.find('div', {'class': 'history-table'})
+        # Extraer nombre del trader
+        nombre_tag = soup.find('h1', {'class': 'name'})
+        if nombre_tag:
+            info["nombre"] = nombre_tag.get_text(strip=True)
         
-        if history_section:
-            # Extraer filas de la tabla de historial
-            rows = history_section.find_all('div', {'class': 'history-row'})[:5]  # Últimos 5 trades
-            
-            for row in rows:
-                try:
-                    # Extraer datos de cada trade
-                    fecha = row.find('div', {'class': 'history-cell-date'}).get_text(strip=True)
-                    simbolo = row.find('div', {'class': 'history-cell-symbol'}).get_text(strip=True)
-                    direccion = row.find('div', {'class': 'history-cell-side'}).get_text(strip=True)
-                    precio = row.find('div', {'class': 'history-cell-price'}).get_text(strip=True)
-                    
-                    if moneda in simbolo:
-                        historial.append({
-                            'fecha': parsear_fecha(fecha),
-                            'moneda': moneda,
-                            'direccion': "COMPRA" if "LONG" in direccion.upper() else "VENTA",
-                            'precio': float(precio.replace('$', '').replace(',', ''))
-                        })
-                except Exception as e:
-                    print(f"Error procesando fila: {str(e)}")
+        # Extraer última operación
+        ultima_op_tag = soup.find('div', {'class': 'last-trade-time'})
+        if ultima_op_tag:
+            info["ultima_operacion"] = ultima_op_tag.get_text(strip=True)
         
-        return historial if historial else None
-        
+        return info
     except Exception as e:
-        print(f"Error en scraping de historial: {str(e)}")
+        print(f"Error al obtener datos del trader: {str(e)}")
         return None
 
-def parsear_fecha(fecha_str):
-    """Convierte la fecha de Binance a objeto datetime"""
-    try:
-        # Ejemplo: "2023-07-28 14:30:45"
-        return datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
-    except:
-        return datetime.now()
-
 def generar_resumen_traders():
-    mensaje = "<b>📊 Historial Reciente de Traders</b>\n\n"
+    mensaje = "<b>🔍 Información de Traders</b>\n\n"
     
     for moneda, trader_uid in TRADERS.items():
         if not trader_uid:
             continue
             
+        datos = obtener_datos_trader(trader_uid, moneda)
         mensaje += f"<b>➡️ TRADER_{moneda}</b>\n"
         
-        # Intentar con proxy primero
-        historial = obtener_historial_trader(trader_uid, moneda)
-        
-        # Si falla, intentar sin proxy
-        if not historial and os.getenv("SCRAPER_API_KEY"):
-            historial = obtener_historial_trader_fallback(trader_uid, moneda)
-        
-        if historial:
-            for trade in historial[:3]:  # Mostrar solo 3 trades más recientes
-                mensaje += (
-                    f"• {trade['direccion']} {trade['moneda']} a {trade['precio']:.2f} $\n"
-                    f"  ⏰ {trade['fecha'].strftime('%d/%m %H:%M')}\n"
-                )
+        if datos:
+            if datos.get("nombre"):
+                mensaje += f"👤 Nombre: {datos['nombre']}\n"
+            if datos.get("ultima_operacion"):
+                mensaje += f"⏰ Última operación: {datos['ultima_operacion']}\n"
         else:
-            mensaje += "• No se pudo obtener historial automáticamente\n"
+            mensaje += "⚠️ No se pudieron obtener datos automáticamente\n"
         
-        mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver historial completo</a>\n\n"
+        mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
     
-    mensaje += "ℹ️ Los datos pueden estar limitados por Binance"
+    mensaje += "ℹ️ Para registrar movimientos manualmente, usa:\n"
+    mensaje += "/registrar [MONEDA] [TIPO] [PRECIO] [NOTAS]"
+    
     enviar_telegram(mensaje)
-    
-# ========== RUTAS ==========
+
+# ========== RUTAS PARA REGISTRO MANUAL ==========
+
+@app.route('/registrar/<moneda>/<tipo>/<precio>/<notas>')
+def registrar_movimiento(moneda, tipo, precio, notas):
+    try:
+        # Insertar en Supabase
+        supabase.table("trades_observados").insert({
+            "moneda": moneda.upper(),
+            "tipo": tipo.upper(),
+            "precio": float(precio),
+            "notas": notas,
+            "fecha": datetime.now(ZoneInfo("Europe/Madrid")).isoformat(),
+            "verificado_por": "usuario"
+        }).execute()
+        
+        enviar_telegram(
+            f"✅ Movimiento registrado:\n"
+            f"• Moneda: {moneda.upper()}\n"
+            f"• Tipo: {tipo.upper()}\n"
+            f"• Precio: {precio}\n"
+            f"• Notas: {notas}"
+        )
+        return "Movimiento registrado exitosamente"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# ========== RUTAS PRINCIPALES ==========
 
 @app.route("/")
 def home():
-    return "OK"
+    return "Sistema de monitoreo de criptos y traders"
 
 @app.route("/resumen")
 def resumen():
@@ -207,7 +215,7 @@ def resumen():
 @app.route("/traders")
 def traders():
     generar_resumen_traders()
-    return "<h1>Resumen de traders enviado 📊</h1><p>Consulta Telegram para los detalles</p>"
+    return "<h1>Información de traders enviada 📊</h1><p>Consulta Telegram para los detalles</p>"
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000)
