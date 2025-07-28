@@ -5,6 +5,7 @@ from datetime import datetime
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import pytz
+import random
 
 # Configuración
 app = Flask(__name__)
@@ -18,25 +19,29 @@ CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 
-# Funciones auxiliares
-def obtener_precios():
+# Obtener datos reales desde CoinMarketCap (precio, cambio 24h, volumen)
+def obtener_datos_mercado():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
     r = requests.get(url, headers=headers, params=params)
     data = r.json()["data"]
-    precios = {}
-    for m in MONEDAS:
-        raw = data[m]["quote"]["EUR"]["price"]
-        precio = round(raw, 8)  # Guardar hasta 8 decimales
-        precios[m] = precio
-    return precios
 
+    resultados = {}
+    for m in MONEDAS:
+        quote = data[m]["quote"]["EUR"]
+        resultados[m] = {
+            "precio": round(quote["price"], 8),
+            "cambio_24h": round(quote["percent_change_24h"], 2),
+            "volumen_24h": round(quote["volume_24h"], 2)
+        }
+    return resultados
+
+# Simulador temporal de RSI (fácil de reemplazar por RSI real en el futuro)
 def obtener_rsi(moneda):
-    # Mock RSI entre 30 y 70
-    import random
     return round(random.uniform(30, 70), 2)
 
+# Generar consejo según RSI
 def consejo_rsi(rsi):
     if rsi > 70:
         return "🔴 RSI alto, quizá vender\n⚠️ Podría haber una bajada en el precio."
@@ -45,46 +50,52 @@ def consejo_rsi(rsi):
     else:
         return "🟡 Quieto chato, no hagas huevadas"
 
+# Enviar mensaje a Telegram
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
     requests.post(url, data=data)
 
+# Guardar en Supabase
 def insertar_en_supabase(nombre, precio, rsi, fecha):
     try:
-        # Asegurar que está en la zona horaria correcta
         hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
-        
-        # Formatear para Supabase
         fecha_formateada = hora_madrid.strftime('%Y-%m-%d %H:%M:%S.%f')
-        
         response = supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
             "rsi": rsi,
             "fecha": fecha_formateada
         }).execute()
-        
         if hasattr(response, 'error') and response.error:
             print(f"Error insertando en Supabase: {response.error}")
     except Exception as e:
         print(f"Excepción al insertar en Supabase: {str(e)}")
         raise
 
-# Y en generar_y_enviar_resumen, modifica la obtención de la hora:
+# Generar y enviar resumen
+
 def generar_y_enviar_resumen():
-    precios = obtener_precios()
-    ahora = datetime.now(ZoneInfo("Europe/Madrid"))  # Esto ya está correcto
-    resumen = "<b>📊 Resumen Manual de Criptomonedas</b>\n"
+    datos = obtener_datos_mercado()
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    resumen = "<b>📊 Resumen Cripto Diario</b>\n"
 
     for m in MONEDAS:
-        precio = precios[m]
-        rsi = obtener_rsi(m)
-        insertar_en_supabase(m, precio, rsi, ahora)  # Pasamos la hora con zona horaria
+        precio = datos[m]["precio"]
+        cambio = datos[m]["cambio_24h"]
+        volumen = datos[m]["volumen_24h"]
+        rsi = obtener_rsi(m)  # A futuro reemplazar por RSI real
+        insertar_en_supabase(m, precio, rsi, ahora)
         consejo = consejo_rsi(rsi)
-        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
 
-    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
+        resumen += (
+            f"\n<b>{m}</b>: {precio:,.8f} €\n"
+            f"🔄 Cambio 24h: {cambio}%\n"
+            f"📊 Volumen: {volumen:,.0f} €\n"
+            f"📈 RSI: {rsi} → {consejo}\n"
+        )
+
+    resumen += f"\n🕒 Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
 
 # Rutas
