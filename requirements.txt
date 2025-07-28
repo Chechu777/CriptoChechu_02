@@ -8,3 +8,4 @@ python-telegram-bot==13.15
 flask
 gunicorn
 pytz
+beautifulsoup4==4.12.2
