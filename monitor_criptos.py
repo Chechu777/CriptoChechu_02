@@ -1,7 +1,7 @@
 import os
 import requests
 from flask import Flask
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import pytz
@@ -51,16 +51,25 @@ def enviar_telegram(mensaje):
     requests.post(url, data=data)
 
 def insertar_en_supabase(nombre, precio, rsi, fecha):
-    # Obtener hora exacta en Madrid
-    hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
-    
-    # Insertar como naive datetime (sin info de timezone)
-    supabase.table("precios").insert({
-        "nombre": nombre,
-        "precio": precio,
-        "rsi": rsi,
-        "fecha": hora_madrid.replace(tzinfo=None)  # Elimina info de timezone
-    }).execute()
+    try:
+        # Asegurar que está en la zona horaria correcta
+        hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+        
+        # Formatear para Supabase
+        fecha_formateada = hora_madrid.strftime('%Y-%m-%d %H:%M:%S.%f')
+        
+        response = supabase.table("precios").insert({
+            "nombre": nombre,
+            "precio": precio,
+            "rsi": rsi,
+            "fecha": fecha_formateada
+        }).execute()
+        
+        if hasattr(response, 'error') and response.error:
+            print(f"Error insertando en Supabase: {response.error}")
+    except Exception as e:
+        print(f"Excepción al insertar en Supabase: {str(e)}")
+        raise
 
 # Y en generar_y_enviar_resumen, modifica la obtención de la hora:
 def generar_y_enviar_resumen():
