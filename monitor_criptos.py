@@ -1,11 +1,12 @@
 import os
 import requests
 from flask import Flask, request
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import random
 from bs4 import BeautifulSoup
+import pytz
 
 # Configuración
 app = Flask(__name__)
@@ -39,22 +40,22 @@ def obtener_precios():
         print(f"Error API CoinMarketCap: {str(e)}")
         return None
 
+
+def obtener_fecha_actual():
+    """Devuelve la fecha actual en la zona horaria correcta"""
+    madrid_tz = pytz.timezone('Europe/Madrid')
+    return datetime.now(madrid_tz)
+
 def insertar_en_supabase(nombre, precio, rsi, fecha):
     try:
-        # Asegurar que la fecha tenga la zona horaria correcta
-        if fecha.tzinfo is None:
-            fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
-        elif fecha.tzinfo != ZoneInfo("Europe/Madrid"):
-            fecha = fecha.astimezone(ZoneInfo("Europe/Madrid"))
-            
-        # Convertir a string ISO con zona horaria
-        fecha_iso = fecha.isoformat()
+        # Convertir explícitamente a UTC antes de insertar
+        fecha_utc = fecha.astimezone(pytz.utc)
         
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
             "rsi": rsi,
-            "fecha": fecha_iso
+            "fecha": fecha_utc.isoformat()  # Guardar en UTC
         }).execute()
     except Exception as e:
         print(f"Error al insertar en Supabase: {str(e)}")
@@ -65,18 +66,18 @@ def generar_resumen_criptos():
         enviar_telegram("⚠️ No se pudieron obtener los precios de las criptomonedas")
         return False
     
-    # Obtener fecha/hora actual con zona horaria correcta
-    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    ahora = obtener_fecha_actual()  # Usar nuestra función mejorada
     
     resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
-
+    
     for m in MONEDAS:
         precio = precios[m]
         rsi = obtener_rsi(m)
-        insertar_en_supabase(m, precio, rsi, ahora)  # Pasamos el objeto datetime con zona horaria
+        insertar_en_supabase(m, precio, rsi, ahora)
         consejo = consejo_rsi(rsi)
         resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
-
+    
+    # Mostrar hora local al usuario
     resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
     return True
