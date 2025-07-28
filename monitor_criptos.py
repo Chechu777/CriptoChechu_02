@@ -13,28 +13,35 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-monedas = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
+monedas = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "ADA": "cardano",
+    "SHIB": "shiba-inu",
+    "SOL": "solana"
+}
 
 # CoinGecko API para RSI
 COINGECKO_URL = "https://api.coingecko.com/api/v3"
 
 # Utilidades
 
-def obtener_precios_y_rsi(moneda):
+def obtener_precios_y_rsi(simbolo):
     try:
+        moneda_id = monedas[simbolo]
         vs_currency = "eur"
         days = 15
-        url = f"{COINGECKO_URL}/coins/{moneda.lower()}/market_chart?vs_currency={vs_currency}&days={days}&interval=daily"
+        url = f"{COINGECKO_URL}/coins/{moneda_id}/market_chart?vs_currency={vs_currency}&days={days}&interval=daily"
         r = requests.get(url)
         data = r.json()
 
         if 'prices' not in data:
-            print(f"Quieto chato, no hagas huevadas: CoinGecko no devolvió 'prices' para {moneda}")
+            print(f"Quieto chato, no hagas huevadas: CoinGecko no devolvió 'prices' para {simbolo}")
             return None, None
 
         precios = [precio[1] for precio in data['prices']]
         if len(precios) < 15:
-            print(f"No hay suficientes datos para calcular RSI de {moneda}")
+            print(f"No hay suficientes datos para calcular RSI de {simbolo}")
             return None, None
 
         precio_actual = precios[-1]
@@ -42,7 +49,7 @@ def obtener_precios_y_rsi(moneda):
         return precio_actual, rsi
 
     except Exception as e:
-        print(f"Error al obtener precios/RSI para {moneda}: {e}")
+        print(f"Error al obtener precios/RSI para {simbolo}: {e}")
         return None, None
 
 def calcular_rsi(data, period=14):
@@ -89,12 +96,13 @@ def enviar_alerta(moneda, precio, rsi):
 def generar_y_enviar_resumen():
     resumen = []
     ahora = datetime.utcnow()
-    for m in monedas:
-        precio, rsi = obtener_precios_y_rsi(m)
-        if precio is not None:
-            insertar_en_supabase(m, precio, rsi, ahora)
-            enviar_alerta(m, precio, rsi)
-            resumen.append(f"{m}: Precio={precio:.8f}€, RSI={rsi}")
+
+    for simbolo in monedas:
+    precio, rsi = obtener_precios_y_rsi(simbolo)
+    if precio is not None:
+        insertar_en_supabase(simbolo, precio, rsi, ahora)
+        enviar_alerta(simbolo, precio, rsi)
+        resumen.append(f"{simbolo}: Precio={precio:.8f}€, RSI={rsi}")
     if resumen:
         mensaje = "\n📊 *Resumen Diario Cripto*\n" + "\n".join(resumen)
         Bot(token=TELEGRAM_TOKEN).send_message(chat_id=TELEGRAM_CHAT_ID, text=mensaje, parse_mode="Markdown")
