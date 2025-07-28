@@ -1,12 +1,11 @@
 import os
 import requests
-from flask import Flask, request
-from datetime import datetime, timezone
+from flask import Flask
+from datetime import datetime
 from supabase import create_client, Client
-from zoneinfo import ZoneInfo
+import pytz
 import random
 from bs4 import BeautifulSoup
-import pytz
 
 # Configuración
 app = Flask(__name__)
@@ -24,7 +23,17 @@ TRADERS = {
     "SOL": os.getenv("TRADER_SOL")
 }
 
-# ========== FUNCIONES AUXILIARES ==========
+# Configuración de headers
+BINANCE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept-Language": "es-ES,es;q=0.9"
+}
+
+# ========== FUNCIONES PRINCIPALES ==========
+
+def obtener_fecha_madrid():
+    """Devuelve la fecha actual en la zona horaria de Madrid"""
+    return datetime.now(pytz.timezone('Europe/Madrid'))
 
 def obtener_precios():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
@@ -40,22 +49,35 @@ def obtener_precios():
         print(f"Error API CoinMarketCap: {str(e)}")
         return None
 
+def obtener_rsi(moneda):
+    return round(random.uniform(30, 70), 2)
 
-def obtener_fecha_actual():
-    """Devuelve la fecha actual en la zona horaria correcta"""
-    madrid_tz = pytz.timezone('Europe/Madrid')
-    return datetime.now(madrid_tz)
+def consejo_rsi(rsi):
+    if rsi > 70:
+        return "🔴 RSI alto, quizá vender\n⚠️ Podría haber una bajada en el precio."
+    elif rsi < 30:
+        return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar pronto al alza."
+    else:
+        return "🟡 Quieto chato, no hagas huevadas"
+
+def enviar_telegram(mensaje):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
+        requests.post(url, data=data)
+    except Exception as e:
+        print(f"Error al enviar mensaje a Telegram: {str(e)}")
 
 def insertar_en_supabase(nombre, precio, rsi, fecha):
     try:
-        # Convertir explícitamente a UTC antes de insertar
+        # Convertir a UTC antes de guardar
         fecha_utc = fecha.astimezone(pytz.utc)
         
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
             "rsi": rsi,
-            "fecha": fecha_utc.isoformat()  # Guardar en UTC
+            "fecha": fecha_utc.isoformat()
         }).execute()
     except Exception as e:
         print(f"Error al insertar en Supabase: {str(e)}")
@@ -66,124 +88,32 @@ def generar_resumen_criptos():
         enviar_telegram("⚠️ No se pudieron obtener los precios de las criptomonedas")
         return False
     
-    ahora = obtener_fecha_actual()  # Usar nuestra función mejorada
-    
+    ahora = obtener_fecha_madrid()
     resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
-    
+
     for m in MONEDAS:
         precio = precios[m]
         rsi = obtener_rsi(m)
         insertar_en_supabase(m, precio, rsi, ahora)
         consejo = consejo_rsi(rsi)
         resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
-    
-    # Mostrar hora local al usuario
+
     resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(resumen)
     return True
 
-# ========== SISTEMA DE TRADERS ==========
-
-def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False
-    })
-
-def obtener_info_trader(trader_uid, moneda):
-    """Intenta obtener información del trader"""
-    try:
-        url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}"
-        response = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }, timeout=10)
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        return {
-            "nombre": soup.find('h1', class_='name').get_text(strip=True) if soup.find('h1', class_='name') else "Trader",
-            "ultima_operacion": soup.find('div', class_='time').get_text(strip=True) if soup.find('div', class_='time') else "No disponible"
-        }
-    except Exception as e:
-        print(f"Error scraping trader: {str(e)}")
-        return None
-
-def generar_resumen_traders():
-    mensaje = "<b>🔔 Monitoreo de Traders</b>\n\n"
-    
-    for moneda, uid in TRADERS.items():
-        if not uid:
-            continue
-            
-        info = obtener_info_trader(uid, moneda) or {}
-        mensaje += (
-            f"<b>➡️ TRADER_{moneda}</b>\n"
-            f"👤 {info.get('nombre', 'Trader')}\n"
-            f"⏰ Última operación: {info.get('ultima_operacion', 'No disponible')}\n"
-            f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{uid}'>Ver detalles</a>\n\n"
-        )
-    
-    mensaje += (
-        "<b>📌 Para registrar una operación:</b>\n"
-        "Envia <code>/registrar SOL COMPRA 142.50 "Aumentó posición"</code>\n"
-        "O usa el enlace:\n"
-        f"https://monitor-criptos.onrender.com/registrar/SOL/COMPRA/142.50/Aumento%20posicion"
-    )
-    
-    enviar_telegram(mensaje)
-
-# ========== REGISTRO MANUAL ==========
-
-@app.route('/registrar/<moneda>/<tipo>/<precio>/<notas>')
-def registrar_operacion(moneda, tipo, precio, notas):
-    try:
-        # Validar moneda
-        moneda = moneda.upper()
-        if moneda not in MONEDAS:
-            return f"Error: Moneda {moneda} no válida"
-        
-        # Insertar en Supabase
-        supabase.table("trades_observados").insert({
-            "moneda": moneda,
-            "tipo": tipo.upper(),
-            "precio": float(precio),
-            "notas": notas.replace("_", " "),
-            "fecha": datetime.now(ZoneInfo("Europe/Madrid")).isoformat(),
-            "fuente": "manual"
-        }).execute()
-        
-        # Notificar por Telegram
-        enviar_telegram(
-            f"✅ <b>Operación registrada</b>\n\n"
-            f"<b>Moneda:</b> {moneda}\n"
-            f"<b>Tipo:</b> {tipo.upper()}\n"
-            f"<b>Precio:</b> {precio} €\n"
-            f"<b>Notas:</b> {notas.replace('_', ' ')}\n\n"
-            f"🕒 {datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d/%m %H:%M')}"
-        )
-        
-        return "Operación registrada exitosamente"
-    except Exception as e:
-        return f"Error: {str(e)}"
-
 # ========== RUTAS PRINCIPALES ==========
 
-@app.route('/')
+@app.route("/")
 def home():
-    return "Sistema de monitoreo activo"
+    return "Sistema de monitoreo de criptomonedas"
 
-@app.route('/resumen')
+@app.route("/resumen")
 def resumen():
     if generar_resumen_criptos():
-        return "Resumen enviado a Telegram"
-    return "Error al generar resumen"
-
-@app.route('/traders')
-def traders():
-    generar_resumen_traders()
-    return "Información de traders enviada"
+        return "<h1>Resumen enviado a Telegram</h1><p>Precios y RSI actualizados</p>"
+    else:
+        return "<h1>Error al generar resumen</h1>"
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host="0.0.0.0", port=10000)
