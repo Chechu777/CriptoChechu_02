@@ -100,7 +100,6 @@ def mensaje_rsi(rsi):
         return "🟡 Quieto chato, no hagas huevadas"
 
 def formato_numero(n):
-    # Formatea números con separador de miles y 2 decimales, o más si es menor que 1
     if n is None:
         return "N/A"
     if n < 1:
@@ -131,15 +130,14 @@ def generar_y_enviar_resumen():
             rsi = None
 
         if precio is not None:
-            insertar_en_supabase(simbolo, precio, rsi, ahora)
+            insertar_en_supabase(simbolo, precio, rsi, cambio_24h, volumen_24h, ahora)
             enviar_alerta(simbolo, precio, cambio_24h, volumen_24h, rsi)
             resumen.append(
-            f"{simbolo}: {formato_numero(precio)} €\n"
-            f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
-            f"📊 Volumen: {formato_numero(volumen_24h)} €\n"
-            f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
+                f"{simbolo}: {formato_numero(precio)} €\n"
+                f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
+                f"📊 Volumen: {formato_numero(volumen_24h)} €\n"
+                f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
             )
-
 
     if resumen:
         mensaje = "📊 *Resumen Cripto Diario*\n\n" + "\n\n".join(resumen)
