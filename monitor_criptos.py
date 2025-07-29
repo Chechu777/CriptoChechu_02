@@ -124,27 +124,42 @@ def obtener_precios_actuales():
         print(f"⚠️ Error al obtener precios: {e}")
         return None
 
+import logging
+from datetime import datetime
+
 def insertar_precio(nombre: str, precio: float, rsi: float = None):
     try:
+        fecha_db = ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
         datos = {
             "nombre": nombre,
-            "precio": precio,
-            "rsi": rsi,
-            "fecha": ahora_madrid().isoformat()
+            "precio": float(precio),
+            "rsi": float(rsi) if rsi else None,
+            "fecha": fecha_db
         }
-        supabase.table("precios").insert(datos).execute()
+        
+        logging.info(f"Insertando {nombre}: Precio={precio:.8f} | RSI={rsi or 'NULL'} | Fecha={fecha_db}")
+        
+        response = supabase.table("precios").insert(datos).execute()
+        
+        if response.data:
+            logging.info(f"✅ Éxito - ID: {response.data[0].get('id', 'N/A')}")
+        else:
+            logging.warning(f"⚠️ Respuesta inesperada: {response}")
+            
+        return True
     except Exception as e:
-        print(f"⚠️ Error al insertar {nombre}: {e}")
+        logging.error(f"🔥 Error en {nombre}: {str(e)}", exc_info=True)
+        return False
 
 def consejo_rsi(rsi: float) -> str:
     if rsi is None:
-        return "Calculando RSI..."
+        return "🔄 Calculando..."
     elif rsi < 30:
-        return "📉 OVERSOLD - Posible compra"
+        return "🔥 📉 OVERSOLD - Buen momento para COMPRAR"
     elif rsi > 70:
-        return "📈 OVERBOUGHT - Posible venta"
+        return "🚨 📈 OVERBOUGHT - Considera VENDER"
     else:
-        return "Neutro"
+        return "⚖️ Quieto chato, no hagas huevadas"
 
 def enviar_telegram(mensaje: str):
     try:
@@ -198,6 +213,10 @@ def resumen():
     mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
     enviar_telegram(mensaje)
     return "Resumen enviado", 200
+
+def limpiar_datos_antiguos(dias=30):
+    fecha_limite = (ahora_madrid() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    supabase.table("precios").delete().lt("fecha", fecha_limite).execute()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
