@@ -239,6 +239,39 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
             "indicadores": {}
         }
 
+# [L~290]
+def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_signal: float | None, confianza: int) -> str:
+    """
+    Devuelve texto de recomendación en base a la señal calculada.
+    - 'COMPRA'  -> 'Podrías comprar'
+    - 'VENTA'   -> 'Podrías vender'
+    - 'NEUTRO'  -> 'Quieto chato, no hagas huevadas'
+    - 'DATOS_INSUFICIENTES' / 'ERROR' -> aviso neutral
+    """
+    try:
+        if senal == "COMPRA":
+            txt = "🟢 Podrías comprar"
+        elif senal == "VENTA":
+            txt = "🔴 Podrías vender"
+        elif senal == "NEUTRO":
+            txt = "⚪ Quieto chato, no hagas huevadas"
+        elif senal in ("DATOS_INSUFICIENTES", "ERROR"):
+            txt = "ℹ️ Sin datos suficientes para recomendar"
+        else:
+            txt = "ℹ️ Sin datos suficientes para recomendar"
+
+        # Añade matiz por confianza (opcional, breve)
+        if senal in ("COMPRA", "VENTA"):
+            if confianza >= 4:
+                txt += " (señal fuerte)"
+            elif confianza <= 2:
+                txt += " (señal débil)"
+
+        print(f"DBG:reco senal={senal} rsi={rsi} macd={macd} sig={macd_signal} conf={confianza} -> {txt}")
+        return txt
+    except Exception:
+        return "ℹ️ Sin datos suficientes para recomendar"
+
 # --- IO: APIs / DB ----------------------------------------------------------
 
 # [L~300]
@@ -481,7 +514,10 @@ def resumen():
                 conf = int(señal.get('confianza', 0))
                 mensaje += f"🎯 <b>Señal:</b> <u>{señal.get('señal','?')}</u>\n"
                 mensaje += f"🔍 <b>Confianza:</b> {'★' * conf}{'☆' * (5 - conf)} ({conf}/5)\n\n"
-
+                
+                reco = recomendar_accion(señal.get('señal'), rsi_val, macd_val, macd_sig, conf)
+                mensaje += f"🤖 <b>Recomendación:</b> {reco}\n\n"
+                
                 print(f"DBG:{moneda} OK rsi={rsi_val} macd={macd_val} sig={macd_sig} conf={conf}")
 
             except Exception as e:
