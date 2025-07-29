@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import numpy as np
-from dateutil.parser import parse  # Nueva importación
+import re  # Nueva importación para manejo de fechas
 
 # Configuración
 app = Flask(__name__)
@@ -21,7 +21,7 @@ MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
 HORAS_HISTORICO = 24
 
-# --- Funciones Auxiliares ---
+# --- Funciones Auxiliares Mejoradas ---
 def ahora_madrid():
     return datetime.now(ZoneInfo("Europe/Madrid"))
 
@@ -29,36 +29,25 @@ def formatear_fecha(fecha):
     return fecha.strftime("%d/%m/%Y %H:%M")
 
 def parsear_fecha_supabase(fecha_str):
-    """Convierte string de fecha de Supabase a datetime"""
+    """Conversión robusta de fecha desde Supabase"""
     try:
-        # Usamos dateutil.parser que es más flexible con formatos
-        return parse(fecha_str).astimezone(ZoneInfo("Europe/Madrid"))
+        # Eliminar microsegundos si son demasiado largos
+        fecha_str = re.sub(r'\.(\d{1,6})\d*', r'.\1', fecha_str)
+        
+        # Manejar formato con o sin 'Z' al final
+        if fecha_str.endswith('Z'):
+            fecha_str = fecha_str[:-1] + '+00:00'
+        elif '+' not in fecha_str and 'Z' not in fecha_str:
+            fecha_str += '+00:00'
+            
+        dt = datetime.fromisoformat(fecha_str)
+        return dt.astimezone(ZoneInfo("Europe/Madrid"))
     except Exception as e:
         print(f"Error al parsear fecha {fecha_str}: {e}")
         return None
 
-# --- Cálculo RSI ---
-def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
-    if len(cierres) < periodo + 1:
-        return None
-    
-    deltas = np.diff(cierres)
-    ganancia = np.where(deltas > 0, deltas, 0)
-    perdida = np.where(deltas < 0, -deltas, 0)
-    
-    avg_gain = np.mean(ganancia[:periodo])
-    avg_loss = np.mean(perdida[:periodo])
-    
-    for i in range(periodo, len(ganancia)):
-        avg_gain = (avg_gain * (periodo - 1) + ganancia[i]) / periodo
-        avg_loss = (avg_loss * (periodo - 1) + perdida[i]) / periodo
-    
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
+# [Resto del código permanece igual hasta obtener_precios_historicos]
 
-# --- Manejo de Datos ---
 def obtener_precios_historicos(nombre: str):
     try:
         fecha_minima = ahora_madrid() - timedelta(hours=HORAS_HISTORICO)
@@ -69,14 +58,14 @@ def obtener_precios_historicos(nombre: str):
         ).gte(
             "fecha", fecha_minima.isoformat()
         ).order(
-            "fecha", desc=False
+            "fecha", desc=True  # Orden descendente para obtener los más recientes primero
         ).execute()
         
         datos = response.data
         if not datos:
             return None
             
-        # Filtrar para intervalo ~1h y parsear fechas correctamente
+        # Procesar registros desde el más reciente al más antiguo
         precios_filtrados = []
         ultima_hora = None
         
@@ -85,88 +74,19 @@ def obtener_precios_historicos(nombre: str):
             if not fecha_registro:
                 continue
                 
-            if ultima_hora is None or (fecha_registro - ultima_hora) >= timedelta(minutes=55):
+            if ultima_hora is None or (ultima_hora - fecha_registro) >= timedelta(minutes=55):
                 precios_filtrados.append(registro["precio"])
                 ultima_hora = fecha_registro
+                
+            if len(precios_filtrados) >= INTERVALO_RSI + 1:
+                break  # Tenemos suficientes datos
         
-        return np.array(precios_filtrados[-INTERVALO_RSI-1:]) if len(precios_filtrados) >= INTERVALO_RSI+1 else None
+        # Ordenar de más antiguo a más reciente para el cálculo RSI
+        precios_filtrados.reverse()
+        return np.array(precios_filtrados) if len(precios_filtrados) >= INTERVALO_RSI + 1 else None
+        
     except Exception as e:
         print(f"Error al obtener histórico {nombre}: {e}")
         return None
 
-def obtener_precios_actuales():
-    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-    params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
-    try:
-        r = requests.get(url, headers=headers, params=params)
-        r.raise_for_status()
-        data = r.json()["data"]
-        return {m: round(data[m]["quote"]["EUR"]["price"], 8) for m in MONEDAS}
-    except Exception as e:
-        print(f"Error al obtener precios: {e}")
-        return None
-
-def insertar_precio(nombre, precio, rsi=None):
-    try:
-        supabase.table("precios").insert({
-            "nombre": nombre,
-            "precio": precio,
-            "rsi": rsi,
-            "fecha": ahora_madrid().isoformat()
-        }).execute()
-    except Exception as e:
-        print(f"Error al insertar precio: {e}")
-
-# --- Mensajes ---
-def consejo_rsi(rsi):
-    if rsi is None:
-        return "Calculando RSI... (más datos necesarios)"
-    elif rsi > 70:
-        return "🔴 RSI alto, considerar vender"
-    elif rsi < 30:
-        return "🟢 RSI bajo, considerar comprar"
-    else:
-        return "🟡 Neutral, mantener posición"
-
-def enviar_telegram(mensaje):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
-        requests.post(url, data=data)
-    except Exception as e:
-        print(f"Error al enviar Telegram: {e}")
-
-# --- Endpoints ---
-@app.route("/")
-def home():
-    return "Bot de Monitoreo Cripto - Operativo"
-
-@app.route("/resumen")
-def resumen():
-    precios = obtener_precios_actuales()
-    if not precios:
-        return "Error al obtener precios", 500
-    
-    mensaje = "<b>📊 Resumen Criptomonedas</b>\n\n"
-    ahora = ahora_madrid()
-    
-    for moneda in MONEDAS:
-        precio = precios[moneda]
-        historicos = obtener_precios_historicos(moneda)
-        
-        if historicos is None:
-            rsi = None
-            mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\nℹ️ {consejo_rsi(rsi)}\n\n"
-        else:
-            rsi = calcular_rsi(historicos)
-            mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n📈 RSI: {rsi:.2f} → {consejo_rsi(rsi)}\n\n"
-        
-        insertar_precio(moneda, precio, rsi)
-    
-    mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
-    enviar_telegram(mensaje)
-    return "Resumen enviado", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# [Resto del código permanece igual]
