@@ -25,6 +25,32 @@ monedas = {
     "SOL": 5426
 }
 
+def obtener_precios_historicos(moneda, dias=15):
+    try:
+        response = (
+            supabase
+            .table("precios")
+            .select("precio")
+            .eq("moneda", moneda)
+            .order("fecha", desc=True)
+            .limit(dias)
+            .execute()
+        )
+        if response.error or not response.data:
+            print(f"No se encontraron datos históricos para {moneda}: {response.error}")
+            return None
+
+        # Obtener precios en orden ascendente (del más antiguo al más reciente)
+        precios = [entry["precio"] for entry in reversed(response.data)]
+        if len(precios) < dias:
+            print(f"Datos insuficientes para RSI de {moneda}: solo {len(precios)} días")
+            return None
+        return precios
+
+    except Exception as e:
+        print(f"Error al obtener precios históricos para {moneda}: {e}")
+        return None
+
 def obtener_datos_completos(simbolo):
     try:
         id_cmc = monedas[simbolo]
@@ -49,7 +75,8 @@ def obtener_datos_completos(simbolo):
 
         # Simulación de precios históricos para RSI
         # CoinMarketCap no da precios históricos gratis, así que simulamos una lista
-        precios_fake = [precio * (1 + np.random.normal(0, 0.01)) for _ in range(15)]
+        # precios_fake = [precio * (1 + np.random.normal(0, 0.01)) for _ in range(15)]
+        precios = obtener_precios_historicos(simbolo)
 
         return precio, cambio_24h, volumen_24h, precios_fake
 
@@ -118,20 +145,21 @@ def generar_y_enviar_resumen():
     ahora = datetime.now(pytz.timezone("Europe/Madrid"))
 
     for simbolo in monedas:
-        precio, cambio_24h, volumen_24h, precios = obtener_datos_completos(simbolo)
-        if precios is not None:
-            rsi = calcular_rsi(np.array(precios))
-        else:
-            rsi = None
+    precio, cambio_24h, volumen_24h, _ = obtener_datos_completos(simbolo)
+    precios = obtener_precios_historicos(simbolo)
+    if precios is not None:
+        rsi = calcular_rsi(np.array(precios))
+    else:
+        rsi = None
 
-        if precio is not None:
-            insertar_en_supabase(simbolo, precio, rsi, cambio_24h, volumen_24h, ahora)
-            resumen.append(
-                f"{simbolo}: {formato_numero(precio)} €\n"
-                f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
-                f"📊 Volumen: {formato_numero(volumen_24h)} €\n"
-                f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
-            )
+    if precio is not None:
+        insertar_en_supabase(simbolo, precio, rsi, cambio_24h, volumen_24h, ahora)
+        resumen.append(
+            f"{simbolo}: {formato_numero(precio)} €\n"
+            f"🔄 Cambio 24h: {formato_numero(cambio_24h)} %\n"
+            f"📊 Volumen: {formato_numero(volumen_24h)} €\n"
+            f"📈 RSI: {rsi} → {mensaje_rsi(rsi)}"
+        )
 
     if resumen:
         mensaje = "📊 Resumen Cripto Diario\n\n" + "\n\n".join(resumen)
