@@ -175,83 +175,109 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
         return False
 
 def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
-    """Versión final a prueba de errores"""
+    """
+    Genera señales de trading mejoradas con RSI dinámico y análisis MACD
+    Devuelve: {
+        'señal': 'COMPRA'/'VENTA'/'NEUTRO',
+        'confianza': 1-5,
+        'tendencia': 'ALZA'/'BAJA'/'PLANA',
+        'indicadores': {
+            'rsi': float,
+            'macd': float,
+            'macd_signal': float
+        }
+    }
+    """
     try:
-        # Validación exhaustiva mejorada
-        if rsi is None:
-            return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA"}
-            
-        if historico is None:
-            return {"señal": "HISTORICO_VACIO", "confianza": 0, "tendencia": "DESCONOCIDA"}
-            
-        # Convertir a lista si es un array de NumPy
-        if isinstance(historico, np.ndarray):
-            historico = historico.tolist()
-            
-        if not isinstance(historico, list) or len(historico) < 5:
-            return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        # Validación inicial de datos
+        if rsi is None or historico is None or len(historico) < 10:
+            return {
+                "señal": "DATOS_INSUFICIENTES",
+                "confianza": 0,
+                "tendencia": "DESCONOCIDA",
+                "indicadores": {}
+            }
+
+        # Convertir a array numpy si es necesario
+        if isinstance(historico, list):
+            historico = np.array(historico, dtype=np.float64)
         
-        # Conversión definitiva a lista de floats
-        try:
-            historico = [float(h) for h in historico if h is not None and float(h) > 0]
-        except Exception as e:
-            logging.error(f"Error convirtiendo datos históricos: {str(e)}")
-            return {"señal": "ERROR_CONVERSION", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        # Calcular MACD
+        macd, macd_signal, macd_hist = calcular_macd(historico)
         
-        if not historico:
-            return {"señal": "HISTORICO_VACIO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        # Determinar tendencia
+        media_corta = np.mean(historico[-5:])
+        media_larga = np.mean(historico[-20:]) if len(historico) >= 20 else media_corta
+        precio_actual = float(precio_actual)
         
-        # Cálculo de tendencia mejorado
-        try:
-            if len(historico) >= 5:
-                media_corta = np.mean(historico[-5:])
-                precio_actual = float(precio_actual)
-                diferencia = precio_actual - media_corta
-                
-                if len(historico) >= 10:
-                    umbral_tendencia = np.std(historico[-10:]) * 0.5
-                else:
-                    umbral_tendencia = np.std(historico) * 0.5
-                
-                if diferencia > umbral_tendencia:
-                    tendencia = "ALZA"
-                elif diferencia < -umbral_tendencia:
-                    tendencia = "BAJA"
-                else:
-                    tendencia = "PLANA"
-            else:
-                tendencia = "DESCONOCIDA"
-        except Exception as e:
-            logging.error(f"Error calculando tendencia: {str(e)}")
-            tendencia = "DESCONOCIDA"
+        # Umbral dinámico basado en volatilidad
+        volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:])
+        ajuste_umbral = min(volatilidad * 40, 15)  # Ajuste máximo de ±15
         
-        # Cálculo de confianza robusto
-        try:
-            if len(historico) >= 10:
-                volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:])
-            else:
-                volatilidad = np.std(historico) / np.mean(historico) if len(historico) > 1 else 0.05
-                
-            confianza = min(5, max(1, int(5 - (volatilidad * 20))))
-        except Exception as e:
-            logging.error(f"Error calculando confianza: {str(e)}")
-            confianza = 3  # Valor por defecto
+        rsi_sobrecompra = 70 - ajuste_umbral/2
+        rsi_sobreventa = 30 + ajuste_umbral/2
         
-        # Generación de señal con umbrales dinámicos
-        try:
-            rsi = float(rsi)
-            if rsi < 30 - (5 - confianza):  # Umbral más agresivo en alta confianza
-                return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
-            elif rsi > 70 + (5 - confianza):
-                return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
-            return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
-        except Exception as e:
-            logging.error(f"Error generando señal: {str(e)}")
-            return {"señal": "ERROR_RSI", "confianza": 0, "tendencia": tendencia}
-            
+        # Señal RSI
+        if rsi < rsi_sobreventa:
+            señal_rsi = "COMPRA"
+        elif rsi > rsi_sobrecompra:
+            señal_rsi = "VENTA"
+        else:
+            señal_rsi = "NEUTRO"
+        
+        # Confirmación MACD
+        confirmacion_macd = ""
+        if macd is not None and macd_signal is not None:
+            if macd > macd_signal and señal_rsi == "COMPRA":
+                confirmacion_macd = "CONFIRMADA"
+            elif macd < macd_signal and señal_rsi == "VENTA":
+                confirmacion_macd = "CONFIRMADA"
+        
+        # Tendencia basada en múltiples factores
+        if precio_actual > media_corta > media_larga:
+            tendencia = "ALZA"
+        elif precio_actual < media_corta < media_larga:
+            tendencia = "BAJA"
+        else:
+            tendencia = "PLANA"
+        
+        # Cálculo de confianza mejorada
+        confianza = calcular_confianza(historico, rsi, macd, macd_signal)
+        
+        return {
+            "señal": señal_rsi,
+            "confianza": confianza,
+            "tendencia": tendencia,
+            "indicadores": {
+                "rsi": round(rsi, 2),
+                "macd": round(macd, 4) if macd else None,
+                "macd_signal": round(macd_signal, 4) if macd_signal else None,
+                "rsi_umbral_compra": round(rsi_sobreventa, 2),
+                "rsi_umbral_venta": round(rsi_sobrecompra, 2)
+            }
+        }
+        
     except Exception as e:
-        logging.critical(f"Error crítico en generar_señal_rsi: {str(e)}", exc_info=True)
-        return {"señal": "ERROR_CRITICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        logging.error(f"Error en generar_señal_rsi: {str(e)}", exc_info=True)
+        return {
+            "señal": "ERROR",
+            "confianza": 0,
+            "tendencia": "DESCONOCIDA",
+            "indicadores": {}
+        }
+
+def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
+    """Calcula el MACD y su línea de señal"""
+    if len(cierres) < periodo_largo + periodo_senal:
+        return None, None, None
+    
+    ema_larga = pd.Series(cierres).ewm(span=periodo_largo, adjust=False).mean()
+    ema_corta = pd.Series(cierres).ewm(span=periodo_corto, adjust=False).mean()
+    macd_line = ema_corta - ema_larga
+    signal_line = macd_line.ewm(span=periodo_senal, adjust=False).mean()
+    histograma = macd_line - signal_line
+    
+    return macd_line.iloc[-1], signal_line.iloc[-1], histograma.iloc[-1]
 
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores"""
@@ -292,11 +318,14 @@ def health_check():
 @app.route("/resumen")
 def resumen():
     try:
+        # Obtener precios actuales
         precios = obtener_precios_actuales()
         if not precios:
+            enviar_telegram("⚠️ <b>Error crítico:</b> No se pudieron obtener los precios actuales")
             return "Error al obtener precios", 500
         
-        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n\n"
+        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n"
+        mensaje += "════════════════════════\n\n"
         ahora = ahora_madrid()
         
         for moneda in MONEDAS:
@@ -304,50 +333,53 @@ def resumen():
                 precio = precios[moneda]
                 historicos = obtener_precios_historicos(moneda)
                 
-                # Asegurarnos de que tenemos datos válidos
-                if historicos is None:
-                    rsi = None
-                    señal = {"señal": "SIN_HISTORICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
-                else:
-                    # Convertir a array NumPy si no lo es ya
-                    if not isinstance(historicos, np.ndarray):
-                        try:
-                            historicos = np.array(historicos, dtype=np.float64)
-                        except Exception as e:
-                            logging.error(f"Error convirtiendo históricos de {moneda}: {str(e)}")
-                            historicos = None
-                    
-                    rsi = calcular_rsi(historicos) if historicos is not None else None
-                    señal = generar_señal_rsi(rsi, precio, historicos)
+                if historicos is None or len(historicos) < 10:
+                    mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
+                    mensaje += "⚠️ Datos insuficientes para análisis\n\n"
+                    continue
                 
+                # Calcular indicadores
+                rsi = calcular_rsi(historicos)
+                macd, macd_signal, _ = calcular_macd(historicos)
+                señal = generar_señal_rsi(rsi, precio, historicos)
+                
+                # Insertar en base de datos
                 insertar_precio(moneda, precio, rsi)
                 
-                # Manejar diferentes casos de error
-                if señal['señal'].startswith('ERROR') or señal['señal'].startswith('DATOS'):
-                    mensaje_señal = f"⚠️ {señal['señal']}"
-                else:
-                    mensaje_señal = señal['señal']
+                # Construir mensaje
+                mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
+                mensaje += f"📈 <b>RSI:</b> {señal['indicadores']['rsi']} "
+                mensaje += f"(Compra<{señal['indicadores']['rsi_umbral_compra']}, "
+                mensaje += f"Venta>{señal['indicadores']['rsi_umbral_venta']})\n"
                 
-                mensaje += (
-                    f"<b>{moneda}:</b> {precio:,.8f} €\n"
-                    f"📈 RSI: {rsi or 'N/A'} | Señal: {mensaje_señal}\n"
-                    f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
-                    f"| Tendencia: {señal['tendencia']}\n\n"
-                )
-            
+                if macd is not None:
+                    mensaje += f"📊 <b>MACD:</b> {señal['indicadores']['macd']:.4f} "
+                    mensaje += f"(Señal: {señal['indicadores']['macd_signal']:.4f}) "
+                    macd_trend = "↑" if señal['indicadores']['macd'] > señal['indicadores']['macd_signal'] else "↓"
+                    mensaje += f"<b>{macd_trend}</b>\n"
+                
+                mensaje += f"🔄 <b>Tendencia:</b> {señal['tendencia']}\n"
+                mensaje += f"🎯 <b>Señal:</b> <u>{señal['señal']}</u>\n"
+                mensaje += f"🔍 <b>Confianza:</b> {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])}"
+                mensaje += f" ({señal['confianza']}/5)\n\n"
+                
             except Exception as e:
                 logging.error(f"Error procesando {moneda}: {str(e)}", exc_info=True)
-                mensaje += (
-                    f"<b>{moneda}:</b> {precios.get(moneda, 'N/A'):,.8f} €\n"
-                    f"⚠️ Error en análisis - Ver logs\n\n"
-                )
+                mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
+                mensaje += f"⚠️ Error en análisis - Ver logs\n\n"
         
-        mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
+        # Pie del mensaje
+        mensaje += "════════════════════════\n"
+        mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>\n"
+        mensaje += f"📶 <i>Indicadores: RSI(14), MACD(12,26,9)</i>"
+        
+        # Enviar mensaje
         enviar_telegram(mensaje)
         return "Resumen enviado", 200
         
     except Exception as e:
         logging.critical(f"Error general en /resumen: {str(e)}", exc_info=True)
+        enviar_telegram("⚠️ <b>Error crítico:</b> Fallo al generar el resumen. Ver logs.")
         return "Error interno", 500
 
 if __name__ == "__main__":
