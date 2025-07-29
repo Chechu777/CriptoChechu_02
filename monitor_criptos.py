@@ -58,23 +58,24 @@ def formatear_fecha(fecha):
 
 def parsear_fecha_supabase(fecha_str):
     """Conversión robusta de fecha desde Supabase"""
-    print(f"🔧 Parseando fecha: {fecha_str}")
     try:
-        # Normalizar formato de fecha
-        fecha_str = re.sub(r'\.(\d{1,6})\d*', r'.\1', fecha_str)
+        # Normalizar formato de microsegundos (eliminar si son >6 dígitos)
+        if '.' in fecha_str:
+            parte_entera, parte_decimal = fecha_str.split('.')
+            parte_decimal = parte_decimal.split('+')[0].split('-')[0].split('Z')[0]
+            fecha_str = f"{parte_entera}.{parte_decimal[:6]}{fecha_str[len(parte_entera)+1+len(parte_decimal):]}"
         
-        # Manejar diferentes formatos de zona horaria
-        if fecha_str.endswith('Z'):
-            fecha_str = fecha_str[:-1] + '+00:00'
-        elif '+' not in fecha_str and 'Z' not in fecha_str:
+        # Forzar formato ISO8601 estándar
+        if 'Z' in fecha_str:
+            fecha_str = fecha_str.replace('Z', '+00:00')
+        elif '+' not in fecha_str and '-' not in fecha_str[20:]:
             fecha_str += '+00:00'
             
-        dt = datetime.fromisoformat(fecha_str)
-        print(f"📅 Fecha parseada: {dt}")
-        return dt.astimezone(ZoneInfo("Europe/Madrid"))
+        return datetime.fromisoformat(fecha_str).astimezone(ZoneInfo("Europe/Madrid"))
     except Exception as e:
-        print(f"❌ Error al parsear fecha {fecha_str}: {e}")
-        return None
+        print(f"❌ Error crítico al parsear fecha {fecha_str}: {str(e)}")
+        # Fallback: devolver hora actual si el parseo falla
+        return ahora_madrid()
 
 # --- Cálculo RSI ---
 def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
@@ -108,12 +109,10 @@ def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
 
 # --- Manejo de Datos ---
 def obtener_precios_historicos(nombre: str):
-    print(f"\n📂 Obteniendo históricos para {nombre}")
     try:
-        fecha_minima = ahora_madrid() - timedelta(hours=HORAS_HISTORICO)
-        print(f"⏳ Fecha mínima: {fecha_minima}")
+        fecha_minima = ahora_madrid() - timedelta(hours=HORAS_HISTORICO*2)  # Ventana más amplia
         
-        query = supabase.table("precios").select(
+        response = supabase.table("precios").select(
             "precio, fecha"
         ).eq(
             "nombre", nombre
@@ -121,44 +120,36 @@ def obtener_precios_historicos(nombre: str):
             "fecha", fecha_minima.isoformat()
         ).order(
             "fecha", desc=True
-        )
-        
-        print("🔍 Ejecutando query en Supabase...")
-        response = query.execute()
-        print("✅ Query ejecutada")
+        ).execute()
         
         datos = response.data
-        print(f"📊 Registros obtenidos: {len(datos)}")
-        
         if not datos:
-            print("⚠️ No hay datos históricos")
+            print(f"⚠️ No hay ningún registro para {nombre} en las últimas {HORAS_HISTORICO*2} horas")
             return None
             
-        # Procesar registros desde el más reciente al más antiguo
+        # Filtrado más tolerante (45-75 minutos entre registros)
         precios_filtrados = []
         ultima_hora = None
         
         for registro in datos:
             fecha_registro = parsear_fecha_supabase(registro["fecha"])
-            if not fecha_registro:
-                continue
-                
-            if ultima_hora is None or (ultima_hora - fecha_registro) >= timedelta(minutes=55):
-                precios_filtrados.append(registro["precio"])
+            precio = float(registro["precio"])
+            
+            if ultima_hora is None or (ultima_hora - fecha_registro) >= timedelta(minutes=45):
+                precios_filtrados.append((fecha_registro, precio))
                 ultima_hora = fecha_registro
-                print(f"➕ Añadido precio: {registro['precio']} @ {fecha_registro}")
                 
-            if len(precios_filtrados) >= INTERVALO_RSI + 1:
+            if len(precios_filtrados) >= INTERVALO_RSI * 2:  # Más datos de los necesarios
                 break
         
-        # Ordenar de más antiguo a más reciente para el cálculo RSI
-        precios_filtrados.reverse()
-        print(f"📈 Precios filtrados: {len(precios_filtrados)}/{INTERVALO_RSI+1}")
+        # Ordenar cronológicamente y extraer solo precios
+        precios_filtrados.sort()
+        precios = [precio for (fecha, precio) in precios_filtrados]
         
-        return np.array(precios_filtrados) if len(precios_filtrados) >= INTERVALO_RSI + 1 else None
+        return np.array(precios[-INTERVALO_RSI-1:]) if len(precios) >= INTERVALO_RSI+1 else None
         
     except Exception as e:
-        print(f"❌ Error al obtener histórico {nombre}: {e}")
+        print(f"❌ Error crítico al obtener históricos {nombre}: {str(e)}")
         return None
 
 def obtener_precios_actuales():
@@ -230,8 +221,22 @@ def enviar_telegram(mensaje):
 # --- Endpoints ---
 @app.route("/")
 def home():
-    print("\n🏠 Endpoint raíz accedido")
-    return "Bot de Monitoreo Cripto - Operativo"
+    try:
+        # Verificar conexiones esenciales
+        test_supabase = supabase.table("precios").select("count", count='exact').execute()
+        return "Bot de Monitoreo Cripto - Operativo\n" \
+               f"Supabase: {'✅' if test_supabase else '❌'}\n" \
+               f"Última actualización: {ahora_madrid().strftime('%d/%m/%Y %H:%M:%S')}"
+    except Exception as e:
+        return f"⚠️ Servicio parcialmente operativo (Error: {str(e)})", 500
+
+@app.route("/status")
+def status():
+    return {
+        "status": "operativo",
+        "supabase": "conectado" if supabase else "error",
+        "ultima_ejecucion": ahora_madrid().isoformat()
+    }
 
 @app.route("/resumen")
 def resumen():
