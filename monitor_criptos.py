@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import numpy as np
+from dateutil.parser import parse  # Nueva importación
 
 # Configuración
 app = Flask(__name__)
@@ -18,6 +19,7 @@ CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
+HORAS_HISTORICO = 24
 
 # --- Funciones Auxiliares ---
 def ahora_madrid():
@@ -25,6 +27,15 @@ def ahora_madrid():
 
 def formatear_fecha(fecha):
     return fecha.strftime("%d/%m/%Y %H:%M")
+
+def parsear_fecha_supabase(fecha_str):
+    """Convierte string de fecha de Supabase a datetime"""
+    try:
+        # Usamos dateutil.parser que es más flexible con formatos
+        return parse(fecha_str).astimezone(ZoneInfo("Europe/Madrid"))
+    except Exception as e:
+        print(f"Error al parsear fecha {fecha_str}: {e}")
+        return None
 
 # --- Cálculo RSI ---
 def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
@@ -50,7 +61,7 @@ def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
 # --- Manejo de Datos ---
 def obtener_precios_historicos(nombre: str):
     try:
-        fecha_minima = ahora_madrid() - timedelta(hours=24)
+        fecha_minima = ahora_madrid() - timedelta(hours=HORAS_HISTORICO)
         response = supabase.table("precios").select(
             "precio, fecha"
         ).eq(
@@ -65,17 +76,20 @@ def obtener_precios_historicos(nombre: str):
         if not datos:
             return None
             
-        # Filtrar para intervalo ~1h
+        # Filtrar para intervalo ~1h y parsear fechas correctamente
         precios_filtrados = []
         ultima_hora = None
         
         for registro in datos:
-            fecha_registro = datetime.fromisoformat(registro["fecha"])
+            fecha_registro = parsear_fecha_supabase(registro["fecha"])
+            if not fecha_registro:
+                continue
+                
             if ultima_hora is None or (fecha_registro - ultima_hora) >= timedelta(minutes=55):
                 precios_filtrados.append(registro["precio"])
                 ultima_hora = fecha_registro
         
-        return np.array(precios_filtrados[-INTERVALO_RSI-1:])
+        return np.array(precios_filtrados[-INTERVALO_RSI-1:]) if len(precios_filtrados) >= INTERVALO_RSI+1 else None
     except Exception as e:
         print(f"Error al obtener histórico {nombre}: {e}")
         return None
@@ -141,7 +155,7 @@ def resumen():
         precio = precios[moneda]
         historicos = obtener_precios_historicos(moneda)
         
-        if historicos is None or len(historicos) < INTERVALO_RSI + 1:
+        if historicos is None:
             rsi = None
             mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\nℹ️ {consejo_rsi(rsi)}\n\n"
         else:
