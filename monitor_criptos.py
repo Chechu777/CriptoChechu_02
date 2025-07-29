@@ -6,7 +6,7 @@ from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 import numpy as np
 import re
-from dateutil.parser import isoparse  # Mejor parser de fechas
+from dateutil.parser import isoparse
 
 # Configuración Flask
 app = Flask(__name__)
@@ -25,7 +25,10 @@ INTERVALO_RSI = 14
 HORAS_HISTORICO = 48  # Ventana más amplia para asegurar datos
 MINUTOS_ENTRE_REGISTROS = 55  # Intervalo mínimo entre registros
 
-# --- Funciones Mejoradas ---
+# Conexión a Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# --- Funciones Auxiliares ---
 def ahora_madrid():
     return datetime.now(ZoneInfo("Europe/Madrid"))
 
@@ -33,18 +36,16 @@ def formatear_fecha(fecha):
     return fecha.strftime("%d/%m/%Y %H:%M")
 
 def parsear_fecha_supabase(fecha_str):
-    """Conversión ultra-robusta de fechas"""
+    """Conversión robusta de fechas desde Supabase"""
     try:
-        # Eliminar microsegundos si existen
         if '.' in fecha_str:
             partes = fecha_str.split('.')
             fecha_str = partes[0] + ('.' + partes[1][:6] if len(partes) > 1 else '')
         
-        # Parsear con dateutil que es más tolerante
         dt = isoparse(fecha_str)
         return dt.astimezone(ZoneInfo("Europe/Madrid"))
     except Exception as e:
-        print(f"⚠️ No se pudo parsear fecha {fecha_str}, usando hora actual. Error: {e}")
+        print(f"⚠️ Error parseando fecha {fecha_str}, usando hora actual. Error: {e}")
         return ahora_madrid()
 
 def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
@@ -72,17 +73,16 @@ def obtener_precios_historicos(nombre: str):
         ).eq("nombre", nombre
         ).gte("fecha", fecha_minima.isoformat()
         ).order("fecha", desc=True
-        ).limit(INTERVALO_RSI * 3).execute()  # Limitar para eficiencia
+        ).limit(INTERVALO_RSI * 3).execute()
         
         datos = response.data
         if not datos:
             return None
             
-        # Filtrar por intervalo y parsear fechas
         precios_filtrados = []
         ultima_hora = None
         
-        for registro in sorted(datos, key=lambda x: x["fecha"]):  # Orden ascendente
+        for registro in sorted(datos, key=lambda x: x["fecha"]):
             fecha = parsear_fecha_supabase(registro["fecha"])
             precio = float(registro["precio"])
             
@@ -99,9 +99,66 @@ def obtener_precios_historicos(nombre: str):
         print(f"Error al obtener históricos {nombre}: {e}")
         return None
 
-# [Resto de funciones permanecen igual...]
+def obtener_precios_actuales():
+    try:
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        parametros = {
+            'symbol': ','.join(MONEDAS),
+            'convert': 'EUR'
+        }
+        headers = {
+            'Accepts': 'application/json',
+            'X-CMC_PRO_API_KEY': CMC_API_KEY
+        }
 
-# --- Endpoints Mejorados ---
+        respuesta = requests.get(url, headers=headers, params=parametros)
+        datos = respuesta.json()
+        
+        precios = {}
+        for moneda in MONEDAS:
+            precio = datos['data'][moneda]['quote']['EUR']['price']
+            precios[moneda] = precio
+        
+        return precios
+    except Exception as e:
+        print(f"⚠️ Error al obtener precios: {e}")
+        return None
+
+def insertar_precio(nombre: str, precio: float, rsi: float = None):
+    try:
+        datos = {
+            "nombre": nombre,
+            "precio": precio,
+            "rsi": rsi,
+            "fecha": ahora_madrid().isoformat()
+        }
+        supabase.table("precios").insert(datos).execute()
+    except Exception as e:
+        print(f"⚠️ Error al insertar {nombre}: {e}")
+
+def consejo_rsi(rsi: float) -> str:
+    if rsi is None:
+        return "Calculando RSI..."
+    elif rsi < 30:
+        return "📉 OVERSOLD - Posible compra"
+    elif rsi > 70:
+        return "📈 OVERBOUGHT - Posible venta"
+    else:
+        return "Neutro"
+
+def enviar_telegram(mensaje: str):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': mensaje,
+            'parse_mode': 'HTML'
+        }
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"⚠️ Error al enviar a Telegram: {e}")
+
+# --- Endpoints ---
 @app.route("/")
 def home():
     return "Bot de Monitoreo Cripto - Operativo", 200
@@ -109,7 +166,6 @@ def home():
 @app.route("/health")
 def health_check():
     try:
-        # Verificar conexiones esenciales
         supabase.table("precios").select("count", count='exact').limit(1).execute()
         return {
             "status": "healthy",
