@@ -174,23 +174,28 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
         logging.error(f"Error insertando {nombre}: {str(e)}", exc_info=True)
         return False
 
-def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dict:
+def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
     """Versión final a prueba de errores"""
     try:
-        # Validación exhaustiva
-        if (rsi is None or 
-            historico is None or 
-            not isinstance(historico, (list, np.ndarray)) or 
-            (isinstance(historico, (list, np.ndarray)) and len(historico) < 5):
+        # Validación exhaustiva mejorada
+        if rsi is None:
+            return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA"}
+            
+        if historico is None:
+            return {"señal": "HISTORICO_VACIO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+            
+        # Convertir a lista si es un array de NumPy
+        if isinstance(historico, np.ndarray):
+            historico = historico.tolist()
+            
+        if not isinstance(historico, list) or len(historico) < 5:
             return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
-        # Conversión definitiva a lista
+        # Conversión definitiva a lista de floats
         try:
-            if isinstance(historico, np.ndarray):
-                historico = historico.tolist()
             historico = [float(h) for h in historico if h is not None and float(h) > 0]
         except Exception as e:
-            logging.error(f"Error convirtiendo datos: {str(e)}")
+            logging.error(f"Error convirtiendo datos históricos: {str(e)}")
             return {"señal": "ERROR_CONVERSION", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
         if not historico:
@@ -198,26 +203,38 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dic
         
         # Cálculo de tendencia mejorado
         try:
-            media_corta = np.mean(historico[-5:])
-            precio_actual = float(precio_actual)
-            diferencia = precio_actual - media_corta
-            umbral_tendencia = np.std(historico[-10:]) * 0.5  # 0.5 desviaciones estándar
-            
-            if diferencia > umbral_tendencia:
-                tendencia = "ALZA"
-            elif diferencia < -umbral_tendencia:
-                tendencia = "BAJA"
+            if len(historico) >= 5:
+                media_corta = np.mean(historico[-5:])
+                precio_actual = float(precio_actual)
+                diferencia = precio_actual - media_corta
+                
+                if len(historico) >= 10:
+                    umbral_tendencia = np.std(historico[-10:]) * 0.5
+                else:
+                    umbral_tendencia = np.std(historico) * 0.5
+                
+                if diferencia > umbral_tendencia:
+                    tendencia = "ALZA"
+                elif diferencia < -umbral_tendencia:
+                    tendencia = "BAJA"
+                else:
+                    tendencia = "PLANA"
             else:
-                tendencia = "PLANA"
+                tendencia = "DESCONOCIDA"
         except Exception as e:
             logging.error(f"Error calculando tendencia: {str(e)}")
             tendencia = "DESCONOCIDA"
         
         # Cálculo de confianza robusto
         try:
-            volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:]) if len(historico) >=10 else 0.05
-            confianza = min(5, max(1, int(5 - (volatilidad * 20))))  # Ajuste más sensible
-        except:
+            if len(historico) >= 10:
+                volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:])
+            else:
+                volatilidad = np.std(historico) / np.mean(historico) if len(historico) > 1 else 0.05
+                
+            confianza = min(5, max(1, int(5 - (volatilidad * 20))))
+        except Exception as e:
+            logging.error(f"Error calculando confianza: {str(e)}")
             confianza = 3  # Valor por defecto
         
         # Generación de señal con umbrales dinámicos
@@ -233,7 +250,7 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dic
             return {"señal": "ERROR_RSI", "confianza": 0, "tendencia": tendencia}
             
     except Exception as e:
-        logging.critical(f"Error crítico: {str(e)}", exc_info=True)
+        logging.critical(f"Error crítico en generar_señal_rsi: {str(e)}", exc_info=True)
         return {"señal": "ERROR_CRITICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
 
 def enviar_telegram(mensaje: str):
@@ -287,28 +304,39 @@ def resumen():
                 precio = precios[moneda]
                 historicos = obtener_precios_historicos(moneda)
                 
-                # Conversión segura a lista
-                datos_historicos = None
-                if historicos is not None:
-                    if isinstance(historicos, np.ndarray):
-                        datos_historicos = historicos.tolist()
-                    else:
-                        datos_historicos = list(historicos) if hasattr(historicos, '__iter__') else [historicos]
-                
-                rsi = calcular_rsi(historicos) if historicos is not None else None
-                señal = generar_señal_rsi(rsi, precio, datos_historicos)
+                # Asegurarnos de que tenemos datos válidos
+                if historicos is None:
+                    rsi = None
+                    señal = {"señal": "SIN_HISTORICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+                else:
+                    # Convertir a array NumPy si no lo es ya
+                    if not isinstance(historicos, np.ndarray):
+                        try:
+                            historicos = np.array(historicos, dtype=np.float64)
+                        except Exception as e:
+                            logging.error(f"Error convirtiendo históricos de {moneda}: {str(e)}")
+                            historicos = None
+                    
+                    rsi = calcular_rsi(historicos) if historicos is not None else None
+                    señal = generar_señal_rsi(rsi, precio, historicos)
                 
                 insertar_precio(moneda, precio, rsi)
                 
+                # Manejar diferentes casos de error
+                if señal['señal'].startswith('ERROR') or señal['señal'].startswith('DATOS'):
+                    mensaje_señal = f"⚠️ {señal['señal']}"
+                else:
+                    mensaje_señal = señal['señal']
+                
                 mensaje += (
                     f"<b>{moneda}:</b> {precio:,.8f} €\n"
-                    f"📈 RSI: {rsi or 'N/A'} | Señal: {señal['señal']}\n"
+                    f"📈 RSI: {rsi or 'N/A'} | Señal: {mensaje_señal}\n"
                     f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
                     f"| Tendencia: {señal['tendencia']}\n\n"
                 )
             
             except Exception as e:
-                logging.error(f"Error procesando {moneda}: {str(e)}")
+                logging.error(f"Error procesando {moneda}: {str(e)}", exc_info=True)
                 mensaje += (
                     f"<b>{moneda}:</b> {precios.get(moneda, 'N/A'):,.8f} €\n"
                     f"⚠️ Error en análisis - Ver logs\n\n"
@@ -319,7 +347,7 @@ def resumen():
         return "Resumen enviado", 200
         
     except Exception as e:
-        logging.critical(f"Error general en /resumen: {str(e)}")
+        logging.critical(f"Error general en /resumen: {str(e)}", exc_info=True)
         return "Error interno", 500
 
 if __name__ == "__main__":
