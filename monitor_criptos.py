@@ -36,28 +36,15 @@ def obtener_precios_historicos(moneda, dias=15):
             .limit(dias)
             .execute()
         )
-        
-        # DEBUG: para ver qué devuelve realmente
-        print(f"Tipo response Supabase para {moneda}: {type(response)}")
-        print(f"Atributos disponibles: {dir(response)}")
-
-        # Comprobar si hay error
-        # Si response.error no existe, omitir chequeo y solo validar data
-        if hasattr(response, "error") and response.error is not None:
-            print(f"Error en consulta Supabase para {moneda}: {response.error}")
-            return None
-        
-        if not hasattr(response, "data") or not response.data:
-            print(f"No se encontraron datos históricos para {moneda}")
+        if response.error or not response.data:
+            print(f"No se encontraron datos históricos para {moneda}: {response.error}")
             return None
 
         precios = [entry["precio"] for entry in reversed(response.data)]
         if len(precios) < dias:
             print(f"Datos insuficientes para RSI de {moneda}: solo {len(precios)} días")
             return None
-        
         return precios
-
     except Exception as e:
         print(f"Error al obtener precios históricos para {moneda}: {e}")
         return None
@@ -65,8 +52,7 @@ def obtener_precios_historicos(moneda, dias=15):
 def obtener_datos_completos(simbolo):
     try:
         id_cmc = monedas[simbolo]
-
-        url_simple = f"https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        url_simple = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
         headers = {
             "X-CMC_PRO_API_KEY": CMC_API_KEY,
             "Accepts": "application/json"
@@ -83,11 +69,8 @@ def obtener_datos_completos(simbolo):
         precio = info.get("price")
         cambio_24h = info.get("percent_change_24h")
         volumen_24h = info.get("volume_24h")
-
         precios = obtener_precios_historicos(simbolo)
-
         return precio, cambio_24h, volumen_24h, precios
-
     except Exception as e:
         print(f"Error al obtener datos para {simbolo}: {e}")
         return None, None, None, None
@@ -125,9 +108,8 @@ def insertar_en_supabase(moneda, precio, rsi, cambio_24h, volumen_24h, fecha):
         }
 
         respuesta = supabase.table("precios").insert(data).execute()
-        if hasattr(respuesta, "error") and respuesta.error is not None:
+        if respuesta.data is None:
             raise Exception(respuesta.error)
-
     except Exception as e:
         print(f"Excepción al insertar en Supabase: {e}")
 
@@ -155,11 +137,7 @@ def generar_y_enviar_resumen():
 
     for simbolo in monedas:
         precio, cambio_24h, volumen_24h, precios = obtener_datos_completos(simbolo)
-
-        if precios is not None:
-            rsi = calcular_rsi(np.array(precios))
-        else:
-            rsi = None
+        rsi = calcular_rsi(np.array(precios)) if precios else None
 
         if precio is not None:
             insertar_en_supabase(simbolo, precio, rsi, cambio_24h, volumen_24h, ahora)
