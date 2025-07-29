@@ -240,35 +240,49 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         }
 
 # [L~290]
+# [L~290]
 def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_signal: float | None, confianza: int) -> str:
     """
-    Devuelve texto de recomendación en base a la señal calculada.
-    - 'COMPRA'  -> 'Podrías comprar'
-    - 'VENTA'   -> 'Podrías vender'
-    - 'NEUTRO'  -> 'Quieto chato, no hagas huevadas'
-    - 'DATOS_INSUFICIENTES' / 'ERROR' -> aviso neutral
+    Recomendación condicionada a confirmación MACD:
+      - COMPRA  -> requiere macd > macd_signal
+      - VENTA   -> requiere macd < macd_signal
+      - Si no hay confirmación o datos, se recomienda esperar.
     """
     try:
+        def confirma_compra():
+            return macd is not None and macd_signal is not None and macd > macd_signal
+
+        def confirma_venta():
+            return macd is not None and macd_signal is not None and macd < macd_signal
+
         if senal == "COMPRA":
-            txt = "🟢 Podrías comprar"
+            if confirma_compra():
+                txt = "🟢 Podrías comprar"
+                if confianza >= 4:
+                    txt += " (señal fuerte)"
+                elif confianza <= 2:
+                    txt += " (señal débil)"
+            else:
+                txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
+
         elif senal == "VENTA":
-            txt = "🔴 Podrías vender"
+            if confirma_venta():
+                txt = "🔴 Podrías vender"
+                if confianza >= 4:
+                    txt += " (señal fuerte)"
+                elif confianza <= 2:
+                    txt += " (señal débil)"
+            else:
+                txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
+
         elif senal == "NEUTRO":
             txt = "⚪ Quieto chato, no hagas huevadas"
-        elif senal in ("DATOS_INSUFICIENTES", "ERROR"):
-            txt = "ℹ️ Sin datos suficientes para recomendar"
         else:
             txt = "ℹ️ Sin datos suficientes para recomendar"
 
-        # Añade matiz por confianza (opcional, breve)
-        if senal in ("COMPRA", "VENTA"):
-            if confianza >= 4:
-                txt += " (señal fuerte)"
-            elif confianza <= 2:
-                txt += " (señal débil)"
-
-        print(f"DBG:reco senal={senal} rsi={rsi} macd={macd} sig={macd_signal} conf={confianza} -> {txt}")
+        print(f"DBG:reco senal={senal} macd={macd} sig={macd_signal} conf={confianza} -> {txt}")
         return txt
+
     except Exception:
         return "ℹ️ Sin datos suficientes para recomendar"
 
