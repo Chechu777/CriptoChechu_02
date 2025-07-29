@@ -83,12 +83,12 @@ def enviar_telegram(mensaje):
     except Exception as e:
         print(f"Error al enviar Telegram: {e}")
 
-def insertar_precio(nombre, precio, fecha):
+def insertar_precio(nombre, precio, fecha, rsi=None):
     try:
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
-            "rsi": None,
+            "rsi": rsi,
             "fecha": fecha.isoformat()
         }).execute()
     except Exception as e:
@@ -106,15 +106,16 @@ def generar_resumen():
 
     for moneda in MONEDAS:
         precio = precios_actuales[moneda]
-        insertar_precio(moneda, precio, ahora)  # Guardar siempre
 
         precios_historicos = obtener_precios_historicos(moneda)
-        if precios_historicos is None:
+        if precios_historicos is None or len(precios_historicos) < 15:
+            rsi = None
             mensaje += f"{moneda}: {precio:,.8f} €\nℹ️ Calculando RSI... (más datos necesarios)\n\n"
-            continue
+        else:
+            rsi = calcular_rsi(precios_historicos)
+            mensaje += f"{moneda}: {precio:,.8f} €\n📈 RSI: {rsi} → {consejo_rsi(rsi)}\n\n"
 
-        rsi = calcular_rsi(precios_historicos)
-        mensaje += f"{moneda}: {precio:,.8f} €\n📈 RSI: {rsi} → {consejo_rsi(rsi)}\n\n"
+        insertar_precio(moneda, precio, ahora, rsi)
 
     mensaje += f"🗓️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
     enviar_telegram(mensaje)
