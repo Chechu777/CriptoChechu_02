@@ -3,13 +3,15 @@ services:
     name: monitor-criptos
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn monitor_criptos:app"
+    startCommand: "gunicorn wsgi:app"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        sync: false  # Este token debe estar definido en el entorno Render
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        sync: false  # ID del chat donde se envían los mensajes
-      - key: ENVIAR_RESUMEN_DIARIO
-        value: "true"
-      - key: RESUMEN_HORA
-        value: "09:30"  # Esta hora será leída desde os.getenv("RESUMEN_HORA")
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: COINMARKETCAP_API_KEY
+        sync: false
