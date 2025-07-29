@@ -1,5 +1,4 @@
 import os
-import logging
 import requests
 import numpy as np
 from flask import Flask
@@ -7,6 +6,12 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
 # Configuración inicial de logging
 logging.basicConfig(
@@ -121,6 +126,7 @@ def obtener_precios_historicos(nombre: str):
         ).gte("fecha", fecha_limite.strftime("%Y-%m-%d %H:%M:%S")
         ).order("fecha", desc=False
         ).limit(INTERVALO_RSI * 3).execute()
+        logging.info(f"Datos crudos de Supabase para {nombre}: {response.data}")
         
         if not response.data:
             return None
@@ -166,45 +172,66 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
 
 def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dict:
     """
-    Versión robusta que maneja:
-    - Arrays de NumPy
-    - Listas vacías
-    - Datos None
+    Versión completamente depurada que maneja:
+    - Datos históricos vacíos
+    - Conversión segura de tipos
+    - Validación exhaustiva
     """
     try:
-        # Validación inicial
-        if rsi is None or not historico or len(historico) == 0:
+        # Validación inicial robusta
+        if rsi is None or historico is None or len(historico) == 0:
+            logging.warning("Datos insuficientes para generar señal")
             return {"señal": "INDETERMINADO", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
-        # Conversión segura a lista
-        if isinstance(historico, np.ndarray):
-            historico = historico.tolist()
+        # Conversión segura a lista y validación
+        try:
+            if isinstance(historico, np.ndarray):
+                historico = historico.tolist()
+            
+            historico = [float(h) for h in historico if h is not None]
+            if not historico:
+                raise ValueError("Lista histórica vacía después de limpieza")
+                
+        except Exception as e:
+            logging.error(f"Error procesando datos históricos: {str(e)}")
+            return {"señal": "ERROR_DATOS", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
-        # Análisis de tendencia
-        primer_precio = float(historico[0])
-        diferencia = float(precio_actual) - primer_precio
-        tendencia = "ALZA" if diferencia > 0 else "BAJA" if diferencia < 0 else "PLANA"
+        # Cálculo de tendencia con validación
+        try:
+            primer_precio = float(historico[0])
+            precio_actual = float(precio_actual)
+            diferencia = precio_actual - primer_precio
+            tendencia = "ALZA" if diferencia > 0 else "BAJA" if diferencia < 0 else "PLANA"
+        except Exception as e:
+            logging.error(f"Error calculando tendencia: {str(e)}")
+            tendencia = "DESCONOCIDA"
         
-        # Cálculo de confianza
+        # Cálculo de confianza con protección
         confianza = 1
-        if len(historico) >= INTERVALO_RSI * 2:
-            try:
-                ultimos_datos = historico[-INTERVALO_RSI*2:]
-                volatilidad = np.std(ultimos_datos) / np.mean(ultimos_datos)
-                confianza = min(5, max(1, int(5 - (volatilidad * 10))))
-            except:
-                confianza = 1
+        try:
+            if len(historico) >= INTERVALO_RSI * 2:
+                ultimos_datos = np.array(historico[-INTERVALO_RSI*2:], dtype=np.float64)
+                if len(ultimos_datos) > 0:
+                    volatilidad = np.std(ultimos_datos) / np.mean(ultimos_datos)
+                    confianza = min(5, max(1, int(5 - (volatilidad * 10))))
+        except Exception as e:
+            logging.warning(f"Error calculando confianza: {str(e)} - Usando valor por defecto")
         
-        # Generación de señal
-        if rsi < 30 and tendencia == "BAJA":
-            return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
-        elif rsi > 70 and tendencia == "ALZA":
-            return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
-        return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
-        
+        # Generación de señal con validación estricta
+        try:
+            rsi = float(rsi)
+            if rsi < 30 and tendencia == "BAJA":
+                return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
+            elif rsi > 70 and tendencia == "ALZA":
+                return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
+            return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
+        except Exception as e:
+            logging.error(f"Error generando señal final: {str(e)}")
+            return {"señal": "ERROR_PROCESO", "confianza": 0, "tendencia": tendencia}
+            
     except Exception as e:
-        logging.error(f"Error generando señal: {str(e)}")
-        return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        logging.critical(f"Error crítico en generar_señal_rsi: {str(e)}")
+        return {"señal": "ERROR_CRITICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
 
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores"""
@@ -244,32 +271,46 @@ def health_check():
 
 @app.route("/resumen")
 def resumen():
-    precios = obtener_precios_actuales()
-    if not precios:
-        return "Error al obtener precios", 500
-    
-    mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n\n"
-    ahora = ahora_madrid()
-    
-    for moneda in MONEDAS:
-        precio = precios[moneda]
-        historicos = obtener_precios_historicos(moneda)
-        rsi = calcular_rsi(historicos) if historicos is not None else None
-        señal = generar_señal_rsi(rsi, precio, historicos if historicos is not None else [])
+    try:
+        precios = obtener_precios_actuales()
+        if not precios:
+            logging.error("No se pudieron obtener precios actuales")
+            return "Error al obtener precios", 500
         
-        if not insertar_precio(moneda, precio, rsi):
-            logging.warning(f"No se pudo insertar {moneda}")
+        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n\n"
+        ahora = ahora_madrid()
         
-        mensaje += (
-            f"<b>{moneda}:</b> {precio:,.8f} €\n"
-            f"📈 RSI: {rsi or 'N/A'} | Señal: {señal['señal']}\n"
-            f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
-            f"| Tendencia: {señal['tendencia']}\n\n"
-        )
-    
-    mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
-    enviar_telegram(mensaje)
-    return "Resumen enviado", 200
+        for moneda in MONEDAS:
+            try:
+                precio = precios[moneda]
+                historicos = obtener_precios_historicos(moneda)
+                
+                logging.info(f"Procesando {moneda} - Datos históricos: {len(historicos) if historicos is not None else 0} registros")
+                
+                rsi = calcular_rsi(historicos) if historicos is not None else None
+                señal = generar_señal_rsi(rsi, precio, historicos)
+                
+                if not insertar_precio(moneda, precio, rsi):
+                    logging.warning(f"No se pudo insertar {moneda} en Supabase")
+                
+                mensaje += (
+                    f"<b>{moneda}:</b> {precio:,.8f} €\n"
+                    f"📈 RSI: {rsi or 'N/A'} | Señal: {señal['señal']}\n"
+                    f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
+                    f"| Tendencia: {señal['tendencia']}\n\n"
+                )
+                
+            except Exception as e:
+                logging.error(f"Error procesando {moneda}: {str(e)}")
+                mensaje += f"<b>{moneda}:</b> Error en análisis\n\n"
+        
+        mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
+        enviar_telegram(mensaje)
+        return "Resumen enviado", 200
+        
+    except Exception as e:
+        logging.critical(f"Error general en /resumen: {str(e)}")
+        return "Error interno", 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
