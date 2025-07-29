@@ -269,36 +269,44 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         }
 
 def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
-    """Calcula el MACD y su línea de señal sin dependencia de pandas"""
+    """Calcula el MACD usando solo numpy"""
     try:
         if len(cierres) < periodo_largo + periodo_senal:
             return None, None, None
         
-        # Convertir a numpy array si es necesario
-        if not isinstance(cierres, np.ndarray):
-            cierres = np.array(cierres, dtype=np.float64)
+        cierres = np.array(cierres, dtype=np.float64)
         
-        # Calcular EMAs manualmente
-        def calcular_ema(values, period):
-            ema = np.zeros_like(values)
-            ema[0] = values[0]
+        # Función para calcular EMA
+        def calcular_ema(data, period):
+            if len(data) < period:
+                return np.mean(data)
+            
             alpha = 2 / (period + 1)
+            ema = np.zeros_like(data)
+            ema[0] = data[0]
             
-            for i in range(1, len(values)):
-                ema[i] = alpha * values[i] + (1 - alpha) * ema[i-1]
+            for i in range(1, len(data)):
+                ema[i] = alpha * data[i] + (1 - alpha) * ema[i-1]
             
-            return ema[-1]  # Devolver solo el último valor
+            return ema[-1]
         
-        ema_larga = calcular_ema(cierres, periodo_largo)
+        # Calcular EMAs
         ema_corta = calcular_ema(cierres, periodo_corto)
+        ema_larga = calcular_ema(cierres, periodo_largo)
         macd_line = ema_corta - ema_larga
         
-        # Calcular EMA del MACD (línea de señal)
-        macd_values = np.array([calcular_ema(cierres[max(0, i-periodo_corto+1):i+1], periodo_corto) - 
-                      calcular_ema(cierres[max(0, i-periodo_largo+1):i+1], periodo_largo)
-                      for i in range(len(cierres))])
+        # Para la línea de señal necesitamos valores históricos de MACD
+        macd_values = []
+        for i in range(periodo_corto, len(cierres)):
+            ema_c = calcular_ema(cierres[:i+1], periodo_corto)
+            ema_l = calcular_ema(cierres[:i+1], periodo_largo)
+            macd_values.append(ema_c - ema_l)
         
-        signal_line = calcular_ema(macd_values, periodo_senal)
+        if len(macd_values) >= periodo_senal:
+            signal_line = calcular_ema(np.array(macd_values), periodo_senal)
+        else:
+            signal_line = macd_line
+            
         histograma = macd_line - signal_line
         
         return macd_line, signal_line, histograma
