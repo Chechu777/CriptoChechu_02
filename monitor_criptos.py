@@ -59,16 +59,20 @@ def parsear_fecha_supabase(fecha_str):
         logging.error(f"Error parseando fecha {fecha_str}: {str(e)}")
         return ahora_madrid()
 
-def calcular_rsi(cierres: np.ndarray, periodo: int = INTERVALO_RSI) -> float:
+def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
     """Cálculo optimizado del RSI con manejo de edge cases"""
-    if len(cierres) < periodo + 1:
+    if cierres is None:
         return None
-    
+        
     try:
-        cierres = np.array(cierres, dtype=np.float64)
-        if np.isnan(cierres).any():
-            return None
+        if isinstance(cierres, (list, np.ndarray)):
+            cierres = np.array(cierres, dtype=np.float64)
+        else:
+            cierres = np.array([float(cierres)], dtype=np.float64)
             
+        if len(cierres) < periodo + 1:
+            return None
+                    
         deltas = np.diff(cierres)
         if np.all(deltas == 0):
             return 50.0
@@ -177,7 +181,7 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dic
         if (rsi is None or 
             historico is None or 
             not isinstance(historico, (list, np.ndarray)) or 
-            len(historico) < 5):
+            (isinstance(historico, (list, np.ndarray)) and len(historico) < 5):
             return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
         # Conversión definitiva a lista
@@ -270,40 +274,49 @@ def health_check():
 
 @app.route("/resumen")
 def resumen():
-    precios = obtener_precios_actuales()
-    if not precios:
-        return "Error al obtener precios", 500
-    
-    mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n\n"
-    ahora = ahora_madrid()
-    
-    for moneda in MONEDAS:
-        precio = precios[moneda]
-        historicos = obtener_precios_historicos(moneda)
+    try:
+        precios = obtener_precios_actuales()
+        if not precios:
+            return "Error al obtener precios", 500
         
-        # Conversión segura a lista
-        datos_historicos = None
-        if historicos is not None:
-            if isinstance(historicos, np.ndarray):
-                datos_historicos = historicos.tolist()
-            else:
-                datos_historicos = list(historicos) if hasattr(historicos, '__iter__') else [historicos]
+        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n\n"
+        ahora = ahora_madrid()
         
-        rsi = calcular_rsi(historicos) if historicos is not None else None
-        señal = generar_señal_rsi(rsi, precio, datos_historicos)
+        for moneda in MONEDAS:
+            try:
+                precio = precios[moneda]
+                historicos = obtener_precios_historicos(moneda)
+                
+                # Conversión segura a lista
+                datos_historicos = None
+                if historicos is not None:
+                    if isinstance(historicos, np.ndarray):
+                        datos_historicos = historicos.tolist()
+                    else:
+                        datos_historicos = list(historicos) if hasattr(historicos, '__iter__') else [historicos]
+                
+                rsi = calcular_rsi(historicos) if historicos is not None else None
+                señal = generar_señal_rsi(rsi, precio, datos_historicos)
+                
+                insertar_precio(moneda, precio, rsi)
+                
+                mensaje += (
+                    f"<b>{moneda}:</b> {precio:,.8f} €\n"
+                    f"📈 RSI: {rsi or 'N/A'} | Señal: {señal['señal']}\n"
+                    f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
+                    f"| Tendencia: {señal['tendencia']}\n\n"
+                )
+            
+            except Exception as e:
+                logging.error(f"Error procesando {moneda}: {str(e)}")
+                mensaje += (
+                    f"<b>{moneda}:</b> {precios.get(moneda, 'N/A'):,.8f} €\n"
+                    f"⚠️ Error en análisis - Ver logs\n\n"
+                )
         
-        insertar_precio(moneda, precio, rsi)
-        
-        mensaje += (
-            f"<b>{moneda}:</b> {precio:,.8f} €\n"
-            f"📈 RSI: {rsi or 'N/A'} | Señal: {señal['señal']}\n"
-            f"🔍 Confianza: {'★' * señal['confianza']}{'☆' * (5 - señal['confianza'])} "
-            f"| Tendencia: {señal['tendencia']}\n\n"
-        )
-    
-    mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
-    enviar_telegram(mensaje)
-    return "Resumen enviado", 200
+        mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>"
+        enviar_telegram(mensaje)
+        return "Resumen enviado", 200
         
     except Exception as e:
         logging.critical(f"Error general en /resumen: {str(e)}")
