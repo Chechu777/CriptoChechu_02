@@ -1,7 +1,7 @@
 import os
 import requests
 import numpy as np
-import pandas as pd  # Nueva importación
+import pandas as pd
 from flask import Flask
 from datetime import datetime, timedelta
 from supabase import create_client, Client
@@ -15,33 +15,22 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-# Configuración inicial de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-# Configuración Flask
 app = Flask(__name__)
-application = app  # Alias para Render
+application = app
 
-# Configuración de conexiones
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-# Constantes
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
 HORAS_HISTORICO = 48
 MINUTOS_ENTRE_REGISTROS = 55
 
-# Conexión a Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Funciones Auxiliares ---
 def ahora_madrid():
     return datetime.now(ZoneInfo("Europe/Madrid"))
 
@@ -49,45 +38,48 @@ def formatear_fecha(fecha):
     return fecha.strftime("%d/%m/%Y %H:%M")
 
 def parsear_fecha_supabase(fecha_str):
-    """Conversión robusta de fechas desde Supabase"""
     try:
         if '.' in fecha_str:
             partes = fecha_str.split('.')
             fecha_str = partes[0] + ('.' + partes[1][:6] if len(partes) > 1 else '')
-        
         dt = isoparse(fecha_str)
         return dt.astimezone(ZoneInfo("Europe/Madrid"))
     except Exception as e:
         logging.error(f"Error parseando fecha {fecha_str}: {str(e)}")
         return ahora_madrid()
 
+def calcular_confianza(historico, rsi, macd, macd_signal):
+    if rsi is None or macd is None or macd_signal is None:
+        return 1
+    confianza = 1
+    if rsi < 30 and macd > macd_signal:
+        confianza = 5
+    elif rsi > 70 and macd < macd_signal:
+        confianza = 5
+    elif rsi < 30 or rsi > 70:
+        confianza = 4
+    elif (30 <= rsi <= 35 and macd > macd_signal) or (65 <= rsi <= 70 and macd < macd_signal):
+        confianza = 3
+    elif 40 <= rsi <= 60:
+        confianza = 2
+    return confianza
+
 def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
-    """Cálculo optimizado del RSI con manejo de edge cases"""
     if cierres is None:
         return None
-        
     try:
-        if isinstance(cierres, (list, np.ndarray)):
-            cierres = np.array(cierres, dtype=np.float64)
-        else:
-            cierres = np.array([float(cierres)], dtype=np.float64)
-            
+        cierres = np.array(cierres, dtype=np.float64)
         if len(cierres) < periodo + 1:
             return None
-                    
         deltas = np.diff(cierres)
         if np.all(deltas == 0):
             return 50.0
-            
         ganancias = np.maximum(deltas, 0)
         perdidas = np.maximum(-deltas, 0)
-        
         avg_gain = np.mean(ganancias[:periodo])
         avg_loss = np.mean(perdidas[:periodo])
-        
         if avg_loss == 0:
             return 100.0 if avg_gain > 0 else 50.0
-            
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         return round(max(0, min(100, rsi)), 2)
@@ -95,159 +87,59 @@ def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
         logging.error(f"Error calculando RSI: {str(e)}")
         return None
 
-def obtener_precios_actuales():
-    """Obtiene precios actuales de CoinMarketCap con manejo robusto de errores"""
+def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        params = {'symbol': ','.join(MONEDAS), 'convert': 'EUR'}
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
-
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        datos = response.json()
-        
-        precios = {}
-        for moneda in MONEDAS:
-            try:
-                precio = float(datos['data'][moneda]['quote']['EUR']['price'])
-                if precio <= 0:
-                    raise ValueError("Precio no positivo")
-                precios[moneda] = precio
-            except (KeyError, ValueError) as e:
-                logging.error(f"Error procesando {moneda}: {str(e)}")
-                return None
-                
-        return precios
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error API CoinMarketCap: {str(e)}")
-        return None
-
-def obtener_precios_historicos(nombre: str):
-    """Recupera precios históricos con validación de datos"""
-    try:
-        fecha_limite = ahora_madrid() - timedelta(hours=HORAS_HISTORICO)
-        response = supabase.table("precios").select(
-            "precio, fecha"
-        ).eq("nombre", nombre
-        ).gte("fecha", fecha_limite.strftime("%Y-%m-%d %H:%M:%S")
-        ).order("fecha", desc=False
-        ).limit(INTERVALO_RSI * 3).execute()
-        logging.info(f"Datos crudos de Supabase para {nombre}: {response.data}")
-        
-        if not response.data:
-            return None
-            
-        precios_validos = []
-        for reg in response.data:
-            try:
-                precio = float(reg['precio'])
-                if precio > 0:
-                    precios_validos.append(precio)
-            except (ValueError, TypeError):
-                continue
-                
-        return np.array(precios_validos) if precios_validos else None
+        if len(cierres) < periodo_largo + periodo_senal:
+            return None, None, None
+        cierres = np.array(cierres, dtype=np.float64)
+        def calcular_ema(data, period):
+            if len(data) < period:
+                return np.mean(data)
+            alpha = 2 / (period + 1)
+            ema = np.zeros_like(data)
+            ema[0] = data[0]
+            for i in range(1, len(data)):
+                ema[i] = alpha * data[i] + (1 - alpha) * ema[i-1]
+            return ema[-1]
+        ema_corta = calcular_ema(cierres, periodo_corto)
+        ema_larga = calcular_ema(cierres, periodo_largo)
+        macd_line = ema_corta - ema_larga
+        macd_values = [calcular_ema(cierres[:i+1], periodo_corto) - calcular_ema(cierres[:i+1], periodo_largo) for i in range(periodo_corto, len(cierres))]
+        signal_line = calcular_ema(np.array(macd_values), periodo_senal) if len(macd_values) >= periodo_senal else macd_line
+        histograma = macd_line - signal_line
+        return macd_line, signal_line, histograma
     except Exception as e:
-        logging.error(f"Error obteniendo históricos: {str(e)}")
-        return None
+        logging.error(f"Error calculando MACD: {str(e)}")
+        return None, None, None
 
-def insertar_precio(nombre: str, precio: float, rsi: float = None):
-    """Inserta datos en Supabase con logging detallado"""
+def generar_señal_rsi(rsi, precio_actual, historico):
     try:
-        if not isinstance(precio, (int, float)) or precio <= 0:
-            raise ValueError("Precio inválido")
-            
-        datos = {
-            "nombre": nombre,
-            "precio": float(precio),
-            "rsi": float(rsi) if rsi else None,
-            "fecha": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
-        }
-        
-        response = supabase.table("precios").insert(datos).execute()
-        
-        if response.data:
-            logging.info(f"Insertado {nombre}: Precio={precio:.8f} | RSI={rsi or 'NULL'}")
-            return True
-        else:
-            logging.warning(f"Respuesta inesperada de Supabase: {response}")
-            return False
-    except Exception as e:
-        logging.error(f"Error insertando {nombre}: {str(e)}", exc_info=True)
-        return False
-
-def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
-    """
-    Genera señales de trading mejoradas con RSI dinámico y análisis MACD
-    Devuelve: {
-        'señal': 'COMPRA'/'VENTA'/'NEUTRO',
-        'confianza': 1-5,
-        'tendencia': 'ALZA'/'BAJA'/'PLANA',
-        'indicadores': {
-            'rsi': float,
-            'macd': float,
-            'macd_signal': float
-        }
-    }
-    """
-    try:
-        # Validación inicial de datos
         if rsi is None or historico is None or len(historico) < 10:
-            return {
-                "señal": "DATOS_INSUFICIENTES",
-                "confianza": 0,
-                "tendencia": "DESCONOCIDA",
-                "indicadores": {}
-            }
-
-        # Convertir a array numpy si es necesario
-        if isinstance(historico, list):
-            historico = np.array(historico, dtype=np.float64)
-        
-        # Calcular MACD
-        macd, macd_signal, macd_hist = calcular_macd(historico)
-        
-        # Determinar tendencia
+            return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
+        historico = np.array(historico, dtype=np.float64)
+        macd, macd_signal, _ = calcular_macd(historico)
         media_corta = np.mean(historico[-5:])
         media_larga = np.mean(historico[-20:]) if len(historico) >= 20 else media_corta
         precio_actual = float(precio_actual)
-        
-        # Umbral dinámico basado en volatilidad
         volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:])
-        ajuste_umbral = min(volatilidad * 40, 15)  # Ajuste máximo de ±15
-        
+        ajuste_umbral = min(volatilidad * 40, 15)
         rsi_sobrecompra = 70 - ajuste_umbral/2
         rsi_sobreventa = 30 + ajuste_umbral/2
-        
-        # Señal RSI
         if rsi < rsi_sobreventa:
-            señal_rsi = "COMPRA"
+            senal_rsi = "COMPRA"
         elif rsi > rsi_sobrecompra:
-            señal_rsi = "VENTA"
+            senal_rsi = "VENTA"
         else:
-            señal_rsi = "NEUTRO"
-        
-        # Confirmación MACD
-        confirmacion_macd = ""
-        if macd is not None and macd_signal is not None:
-            if macd > macd_signal and señal_rsi == "COMPRA":
-                confirmacion_macd = "CONFIRMADA"
-            elif macd < macd_signal and señal_rsi == "VENTA":
-                confirmacion_macd = "CONFIRMADA"
-        
-        # Tendencia basada en múltiples factores
+            senal_rsi = "NEUTRO"
         if precio_actual > media_corta > media_larga:
             tendencia = "ALZA"
         elif precio_actual < media_corta < media_larga:
             tendencia = "BAJA"
         else:
             tendencia = "PLANA"
-        
-        # Cálculo de confianza mejorada
         confianza = calcular_confianza(historico, rsi, macd, macd_signal)
-        
         return {
-            "señal": señal_rsi,
+            "señal": senal_rsi,
             "confianza": confianza,
             "tendencia": tendencia,
             "indicadores": {
@@ -258,15 +150,9 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
                 "rsi_umbral_venta": round(rsi_sobrecompra, 2)
             }
         }
-        
     except Exception as e:
         logging.error(f"Error en generar_señal_rsi: {str(e)}", exc_info=True)
-        return {
-            "señal": "ERROR",
-            "confianza": 0,
-            "tendencia": "DESCONOCIDA",
-            "indicadores": {}
-        }
+        return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
 
 def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
     """Calcula el MACD usando solo numpy"""
