@@ -36,14 +36,26 @@ def obtener_precios_historicos(moneda, dias=15):
             .limit(dias)
             .execute()
         )
-        if response.error or not response.data:
-            print(f"No se encontraron datos históricos para {moneda}: {response.error}")
+        
+        # DEBUG: para ver qué devuelve realmente
+        print(f"Tipo response Supabase para {moneda}: {type(response)}")
+        print(f"Atributos disponibles: {dir(response)}")
+
+        # Comprobar si hay error
+        # Si response.error no existe, omitir chequeo y solo validar data
+        if hasattr(response, "error") and response.error is not None:
+            print(f"Error en consulta Supabase para {moneda}: {response.error}")
+            return None
+        
+        if not hasattr(response, "data") or not response.data:
+            print(f"No se encontraron datos históricos para {moneda}")
             return None
 
         precios = [entry["precio"] for entry in reversed(response.data)]
         if len(precios) < dias:
             print(f"Datos insuficientes para RSI de {moneda}: solo {len(precios)} días")
             return None
+        
         return precios
 
     except Exception as e:
@@ -113,8 +125,9 @@ def insertar_en_supabase(moneda, precio, rsi, cambio_24h, volumen_24h, fecha):
         }
 
         respuesta = supabase.table("precios").insert(data).execute()
-        if respuesta.data is None:
+        if hasattr(respuesta, "error") and respuesta.error is not None:
             raise Exception(respuesta.error)
+
     except Exception as e:
         print(f"Excepción al insertar en Supabase: {e}")
 
@@ -141,8 +154,7 @@ def generar_y_enviar_resumen():
     ahora = datetime.now(pytz.timezone("Europe/Madrid"))
 
     for simbolo in monedas:
-        precio, cambio_24h, volumen_24h, _ = obtener_datos_completos(simbolo)
-        precios = obtener_precios_historicos(simbolo)
+        precio, cambio_24h, volumen_24h, precios = obtener_datos_completos(simbolo)
         if precios is not None:
             rsi = calcular_rsi(np.array(precios))
         else:
