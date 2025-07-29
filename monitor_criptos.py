@@ -85,14 +85,15 @@ def enviar_telegram(mensaje):
 
 def insertar_precio(nombre, precio, fecha, rsi=None):
     try:
-        # Asegurar que la fecha tenga zona horaria Europe/Madrid
+        # Convierte fecha a hora local Madrid sin tzinfo (zona horaria eliminada)
         if fecha.tzinfo is None:
-            fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+            fecha_local = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
         else:
-            fecha = fecha.astimezone(ZoneInfo("Europe/Madrid"))
+            fecha_local = fecha.astimezone(ZoneInfo("Europe/Madrid"))
+        # Elimina tzinfo para guardar solo la fecha y hora "plana"
+        fecha_local_naive = fecha_local.replace(tzinfo=None)
 
-        # Formatear sin zona horaria, con microsegundos
-        fecha_str = fecha.strftime("%Y-%m-%d %H:%M:%S.%f")
+        fecha_str = fecha_local_naive.strftime("%Y-%m-%d %H:%M:%S.%f")
 
         supabase.table("precios").insert({
             "nombre": nombre,
