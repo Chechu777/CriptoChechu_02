@@ -155,6 +155,7 @@ def generar_y_enviar_resumen():
 
     for simbolo in monedas:
         precio, cambio_24h, volumen_24h, precios = obtener_datos_completos(simbolo)
+
         if precios is not None:
             rsi = calcular_rsi(np.array(precios))
         else:
