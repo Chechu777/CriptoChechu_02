@@ -1,12 +1,10 @@
 import os
 import requests
 from flask import Flask
-from datetime import datetime, timezone
+from datetime import datetime
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
-import random
 import numpy as np
-from cryptocompare import get_coin_ohlcv_historical
 
 # Configuración
 app = Flask(__name__)
@@ -19,25 +17,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
-TRADERS = {
-    "BTC": os.getenv("TRADER_BTC"),
-    "SOL": os.getenv("TRADER_SOL"),
-    "SHIB": os.getenv("TRADER_SHIB"),
-    "ADA": os.getenv("TRADER_ADA")
-}
 
-# Configuración de headers para evitar bloqueos
-BINANCE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.binance.com/"
-}
-
-# --- Cálculo RSI ---
+# --- Funciones RSI ---
 def calcular_rsi(cierres: np.ndarray, periodo: int = 14) -> float:
-    delta = np.diff(cierres)
-    ganancia = np.where(delta > 0, delta, 0)
-    perdida = np.where(delta < 0, -delta, 0)
+    deltas = np.diff(cierres)
+    ganancia = np.where(deltas > 0, deltas, 0)
+    perdida = np.where(deltas < 0, -deltas, 0)
     media_ganancia = np.mean(ganancia[:periodo])
     media_perdida = np.mean(perdida[:periodo])
     if media_perdida == 0:
@@ -45,56 +30,47 @@ def calcular_rsi(cierres: np.ndarray, periodo: int = 14) -> float:
     rs = media_ganancia / media_perdida
     return round(100 - (100 / (1 + rs)), 2)
 
-def obtener_rsi(simbolo: str, dias: int = 15) -> float | None:
+def obtener_precios_historicos(nombre: str, dias: int = 15):
     try:
-        respuesta = get_coin_ohlcv_historical(
-            simbolo,
-            currency="EUR",
-            exchange="CCCAGG",
-            limit=dias - 1
-        )
-
-        if not respuesta or not hasattr(respuesta, 'data') or not isinstance(respuesta.data, list):
-            print(f"⚠️ Respuesta inválida de CryptoCompare para {simbolo}")
+        response = supabase.table("precios")\
+            .select("precio, fecha")\
+            .eq("nombre", nombre)\
+            .order("fecha", desc=True)\
+            .limit(dias)\
+            .execute()
+        datos = response.data
+        if not datos or len(datos) < dias:
             return None
-
-        cierres = [dia["close"] for dia in respuesta.data if "close" in dia]
-        if len(cierres) < dias:
-            print(f"⚠️ Datos insuficientes para RSI de {simbolo}")
-            return None
-
-        return calcular_rsi(np.array(cierres))
-
+        # Ordenar cronológicamente para RSI
+        precios = [item["precio"] for item in reversed(datos)]
+        return np.array(precios)
     except Exception as e:
-        print(f"❌ Error al obtener RSI para {simbolo}: {e}")
+        print(f"Error al obtener histórico {nombre}: {e}")
         return None
 
 # --- Precios desde CoinMarketCap ---
-def obtener_precios():
+def obtener_precios_actuales():
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
-
     try:
         r = requests.get(url, headers=headers, params=params)
         r.raise_for_status()
         data = r.json()["data"]
         precios = {}
         for m in MONEDAS:
-            raw = data[m]["quote"]["EUR"]["price"]
-            precio = round(raw, 8)
-            precios[m] = precio
+            precios[m] = round(data[m]["quote"]["EUR"]["price"], 8)
         return precios
     except Exception as e:
-        print(f"Error al obtener precios: {str(e)}")
+        print(f"Error al obtener precios: {e}")
         return None
 
-# --- Auxiliares ---
+# --- Mensajes ---
 def consejo_rsi(rsi):
     if rsi > 70:
-        return "🔴 RSI alto, quizá vender\n⚠️ Podría haber una bajada en el precio."
+        return "🔴 RSI alto, quizá vender\n⚠️ Podría bajar el precio."
     elif rsi < 30:
-        return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar pronto al alza."
+        return "🟢 RSI bajo, quizá comprar\n📈 Podría rebotar al alza."
     else:
         return "🟡 Quieto chato, no hagas huevadas"
 
@@ -105,98 +81,56 @@ def enviar_telegram(mensaje):
         response = requests.post(url, data=data)
         response.raise_for_status()
     except Exception as e:
-        print(f"Error al enviar mensaje a Telegram: {str(e)}")
+        print(f"Error al enviar Telegram: {e}")
 
-def insertar_en_supabase(nombre, precio, rsi, fecha):
+def insertar_precio(nombre, precio, fecha):
     try:
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
-            "rsi": rsi,
+            "rsi": None,
             "fecha": fecha.isoformat()
         }).execute()
     except Exception as e:
-        print(f"Error al insertar en Supabase: {str(e)}")
+        print(f"Error al insertar precio en Supabase: {e}")
 
-def generar_resumen_criptos():
-    precios = obtener_precios()
-    if not precios:
-        enviar_telegram("⚠️ No se pudieron obtener los precios de las criptomonedas")
+# --- Generar resumen ---
+def generar_resumen():
+    precios_actuales = obtener_precios_actuales()
+    if not precios_actuales:
+        enviar_telegram("⚠️ No se pudieron obtener los precios actuales.")
         return False
 
     ahora = datetime.now(ZoneInfo("Europe/Madrid"))
-    resumen = "<b>📊 Resumen de Criptomonedas</b>\n"
+    mensaje = "<b>📊 Resumen Cripto Diario</b>\n\n"
 
-    for m in MONEDAS:
-        precio = precios[m]
-        rsi = obtener_rsi(m)
-        if rsi is None:
-            print(f"RSI nulo para {m}, no se insertará en Supabase.")
+    for moneda in MONEDAS:
+        precio = precios_actuales[moneda]
+        insertar_precio(moneda, precio, ahora)  # Guardar siempre
+
+        precios_historicos = obtener_precios_historicos(moneda)
+        if precios_historicos is None:
+            mensaje += f"{moneda}: {precio:,.8f} €\nℹ️ Calculando RSI... (más datos necesarios)\n\n"
             continue
-        insertar_en_supabase(m, precio, rsi, ahora)
-        consejo = consejo_rsi(rsi)
-        resumen += f"\n<b>{m}</b>: {precio:,.8f} €\nRSI: {rsi} → {consejo}\n"
 
-    resumen += f"\n🗱️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
-    enviar_telegram(resumen)
+        rsi = calcular_rsi(precios_historicos)
+        mensaje += f"{moneda}: {precio:,.8f} €\n📈 RSI: {rsi} → {consejo_rsi(rsi)}\n\n"
+
+    mensaje += f"🗓️ Actualizado: {ahora.strftime('%d/%m %H:%M')} (Hora Europa)"
+    enviar_telegram(mensaje)
     return True
 
-def obtener_datos_trader_web(trader_uid, moneda):
-    try:
-        url = f"https://www.binance.com/es/copy-trading/lead-details/{trader_uid}?timeRange=7D"
-        response = requests.get(url, headers=BINANCE_HEADERS)
-        response.raise_for_status()
-        if "Última operación" in response.text:
-            return {
-                "moneda": moneda,
-                "precio": None,
-                "direccion": "Datos en página web",
-                "fecha": datetime.now(),
-                "origen": "web_scraping"
-            }
-    except Exception as e:
-        print(f"Error en scraping web: {str(e)}")
-    return None
-
-def generar_resumen_traders():
-    mensaje = "<b>📊 Actividad Reciente de Traders</b>\n\n"
-    traders_con_datos = False
-
-    for moneda, trader_uid in TRADERS.items():
-        if not trader_uid:
-            continue
-
-        datos = obtener_datos_trader(trader_uid, moneda)
-        if not datos:
-            datos = obtener_datos_trader_web(trader_uid, moneda)
-
-        if datos:
-            traders_con_datos = True
-            mensaje += f"📊 <b>TRADER_{moneda}</b>\n"
-            mensaje += f"🔗 <a href='https://www.binance.com/es/copy-trading/lead-details/{trader_uid}'>Ver en Binance</a>\n\n"
-        else:
-            mensaje += f"❌ TRADER_{moneda}: No se pudieron obtener datos\n\n"
-
-    if not traders_con_datos:
-        mensaje += "ℹ️ <i>Los datos de traders solo están disponibles consultando manualmente los enlaces</i>"
-
-    enviar_telegram(mensaje)
-
+# --- Flask routes ---
 @app.route("/")
 def home():
     return "OK"
 
 @app.route("/resumen")
 def resumen():
-    if generar_resumen_criptos():
-        return "<h1>Resumen enviado a Telegram 📢</h1><p>Precios y RSI actualizados</p>"
+    if generar_resumen():
+        return "<h1>Resumen enviado a Telegram 📢</h1><p>Precios y RSI actualizados.</p>"
     else:
-        return "<h1>Error al generar resumen</h1><p>Verifica los logs para más información</p>"
+        return "<h1>Error al generar resumen</h1><p>Verifica logs.</p>"
 
-@app.route("/traders")
-def traders():
-    generar_resumen_traders()
-    return "<h1>Resumen de traders enviado 📊</h1><p>Consulta Telegram para los detalles</p>"
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
