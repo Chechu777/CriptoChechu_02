@@ -165,26 +165,46 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
         return False
 
 def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dict:
-    """Genera señal de trading con análisis de confianza"""
-    if rsi is None or not historico:
-        return {"señal": "INDETERMINADO", "confianza": 0, "tendencia": "DESCONOCIDA"}
-    
-    # Análisis de tendencia
-    diferencia = precio_actual - historico[0]
-    tendencia = "ALZA" if diferencia > 0 else "BAJA" if diferencia < 0 else "PLANA"
-    
-    # Cálculo de confianza basado en volatilidad
-    confianza = 1
-    if len(historico) >= INTERVALO_RSI * 2:
-        volatilidad = np.std(historico[-INTERVALO_RSI*2:]) / np.mean(historico[-INTERVALO_RSI*2:])
-        confianza = min(5, max(1, int(5 - (volatilidad * 10))))
-    
-    # Generación de señal
-    if rsi < 30 and tendencia == "BAJA":
-        return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
-    elif rsi > 70 and tendencia == "ALZA":
-        return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
-    return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
+    """
+    Versión robusta que maneja:
+    - Arrays de NumPy
+    - Listas vacías
+    - Datos None
+    """
+    try:
+        # Validación inicial
+        if rsi is None or not historico or len(historico) == 0:
+            return {"señal": "INDETERMINADO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        
+        # Conversión segura a lista
+        if isinstance(historico, np.ndarray):
+            historico = historico.tolist()
+        
+        # Análisis de tendencia
+        primer_precio = float(historico[0])
+        diferencia = float(precio_actual) - primer_precio
+        tendencia = "ALZA" if diferencia > 0 else "BAJA" if diferencia < 0 else "PLANA"
+        
+        # Cálculo de confianza
+        confianza = 1
+        if len(historico) >= INTERVALO_RSI * 2:
+            try:
+                ultimos_datos = historico[-INTERVALO_RSI*2:]
+                volatilidad = np.std(ultimos_datos) / np.mean(ultimos_datos)
+                confianza = min(5, max(1, int(5 - (volatilidad * 10))))
+            except:
+                confianza = 1
+        
+        # Generación de señal
+        if rsi < 30 and tendencia == "BAJA":
+            return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
+        elif rsi > 70 and tendencia == "ALZA":
+            return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
+        return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
+        
+    except Exception as e:
+        logging.error(f"Error generando señal: {str(e)}")
+        return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA"}
 
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores"""
@@ -235,7 +255,7 @@ def resumen():
         precio = precios[moneda]
         historicos = obtener_precios_historicos(moneda)
         rsi = calcular_rsi(historicos) if historicos is not None else None
-        señal = generar_señal_rsi(rsi, precio, historicos.tolist() if historicos else [])
+        señal = generar_señal_rsi(rsi, precio, historicos if historicos is not None else [])
         
         if not insertar_precio(moneda, precio, rsi):
             logging.warning(f"No se pudo insertar {moneda}")
