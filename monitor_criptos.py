@@ -85,17 +85,21 @@ def enviar_telegram(mensaje):
 
 def insertar_precio(nombre, precio, fecha, rsi=None):
     try:
-        hora_madrid = fecha.astimezone(ZoneInfo("Europe/Madrid")) if fecha.tzinfo else fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
-        fecha_formateada = hora_madrid.isoformat()
+        # Asegurar que la fecha tenga zona horaria de Madrid
+        if fecha.tzinfo is None:
+            fecha = fecha.replace(tzinfo=ZoneInfo("Europe/Madrid"))
+        else:
+            fecha = fecha.astimezone(ZoneInfo("Europe/Madrid"))
+
+        # Insertar directamente el datetime con zona horaria
         supabase.table("precios").insert({
             "nombre": nombre,
             "precio": precio,
             "rsi": rsi,
-            "fecha": fecha_formateada
+            "fecha": fecha
         }).execute()
     except Exception as e:
         print(f"Error al insertar precio en Supabase: {e}")
-
 
 # --- Generar resumen ---
 def generar_resumen():
