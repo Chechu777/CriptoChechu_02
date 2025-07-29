@@ -172,66 +172,58 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
 
 def generar_señal_rsi(rsi: float, precio_actual: float, historico: list) -> dict:
     """
-    Versión completamente depurada que maneja:
-    - Datos históricos vacíos
-    - Conversión segura de tipos
-    - Validación exhaustiva
+    Versión optimizada que corrige:
+    - Cálculo de tendencia usando media móvil corta
+    - Ajuste de confianza basado en volatilidad normalizada
+    - Umbrales dinámicos de RSI
     """
     try:
         # Validación inicial robusta
-        if rsi is None or historico is None or len(historico) == 0:
-            logging.warning("Datos insuficientes para generar señal")
+        if rsi is None or not historico or len(historico) < 5:
             return {"señal": "INDETERMINADO", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
-        # Conversión segura a lista y validación
-        try:
-            if isinstance(historico, np.ndarray):
-                historico = historico.tolist()
-            
-            historico = [float(h) for h in historico if h is not None]
-            if not historico:
-                raise ValueError("Lista histórica vacía después de limpieza")
-                
-        except Exception as e:
-            logging.error(f"Error procesando datos históricos: {str(e)}")
+        # Convertir y limpiar datos históricos
+        historico = [float(h) for h in historico if h is not None and float(h) > 0]
+        if not historico:
             return {"señal": "ERROR_DATOS", "confianza": 0, "tendencia": "DESCONOCIDA"}
         
-        # Cálculo de tendencia con validación
-        try:
-            primer_precio = float(historico[0])
-            precio_actual = float(precio_actual)
-            diferencia = precio_actual - primer_precio
-            tendencia = "ALZA" if diferencia > 0 else "BAJA" if diferencia < 0 else "PLANA"
-        except Exception as e:
-            logging.error(f"Error calculando tendencia: {str(e)}")
-            tendencia = "DESCONOCIDA"
+        precio_actual = float(precio_actual)
         
-        # Cálculo de confianza con protección
-        confianza = 1
-        try:
-            if len(historico) >= INTERVALO_RSI * 2:
-                ultimos_datos = np.array(historico[-INTERVALO_RSI*2:], dtype=np.float64)
-                if len(ultimos_datos) > 0:
-                    volatilidad = np.std(ultimos_datos) / np.mean(ultimos_datos)
-                    confianza = min(5, max(1, int(5 - (volatilidad * 10))))
-        except Exception as e:
-            logging.warning(f"Error calculando confianza: {str(e)} - Usando valor por defecto")
+        # Cálculo de tendencia mejorado (usando media móvil de 5 períodos)
+        ultimos_precios = historico[-5:]
+        media_corta = np.mean(ultimos_precios)
+        tendencia = "ALZA" if precio_actual > media_corta * 1.005 else "BAJA" if precio_actual < media_corta * 0.995 else "PLANA"
         
-        # Generación de señal con validación estricta
-        try:
-            rsi = float(rsi)
-            if rsi < 30 and tendencia == "BAJA":
-                return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
-            elif rsi > 70 and tendencia == "ALZA":
-                return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
-            return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
-        except Exception as e:
-            logging.error(f"Error generando señal final: {str(e)}")
-            return {"señal": "ERROR_PROCESO", "confianza": 0, "tendencia": tendencia}
-            
+        # Cálculo de confianza optimizado
+        confianza = 3  # Valor por defecto
+        if len(historico) >= 10:
+            volatilidad = np.std(historico[-10:]) / np.mean(historico[-10:])
+            # Escala de confianza ajustada:
+            if volatilidad < 0.01:  # Mercado muy estable
+                confianza = 5
+            elif volatilidad < 0.03:
+                confianza = 4
+            elif volatilidad < 0.05:
+                confianza = 3
+            elif volatilidad < 0.08:
+                confianza = 2
+            else:
+                confianza = 1
+        
+        # Umbrales dinámicos de RSI basados en volatilidad
+        umbral_compra = 28 if confianza >=4 else 30
+        umbral_venta = 72 if confianza >=4 else 70
+        
+        # Generación de señal mejorada
+        if rsi < umbral_compra and tendencia == "BAJA":
+            return {"señal": "COMPRA", "confianza": confianza, "tendencia": tendencia}
+        elif rsi > umbral_venta and tendencia == "ALZA":
+            return {"señal": "VENTA", "confianza": confianza, "tendencia": tendencia}
+        return {"señal": "NEUTRO", "confianza": confianza, "tendencia": tendencia}
+        
     except Exception as e:
-        logging.critical(f"Error crítico en generar_señal_rsi: {str(e)}")
-        return {"señal": "ERROR_CRITICO", "confianza": 0, "tendencia": "DESCONOCIDA"}
+        logging.error(f"Error en generar_señal_rsi: {str(e)}", exc_info=True)
+        return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA"}
 
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores"""
