@@ -336,25 +336,68 @@ def insertar_precio(nombre: str, precio: float, rsi: float = None):
 
 # [L~420]
 def enviar_telegram(mensaje: str):
-    """Envía mensaje a Telegram con manejo de errores"""
+    """Envía mensaje a Telegram con manejo de errores y fallback."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload_html = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': mensaje,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True
+    }
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
+        r = requests.post(url, json=payload_html, timeout=10)
+        if r.status_code == 200:
+            print("DBG:telegram enviado OK (HTML)")
+            return
+        # Log detallado
+        body = (r.text or "")[:500]
+        logging.error(f"Telegram {r.status_code}: {body}")
+        print(f"DBG:telegram resp={r.status_code} body={body}")
+
+        # Fallback si es error de parseo HTML
+        if "parse" in body.lower() or "entity" in body.lower():
+            payload_plain = {
                 'chat_id': TELEGRAM_CHAT_ID,
-                'text': mensaje,
-                'parse_mode': 'HTML'
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        print("DBG:telegram enviado OK")
+                'text': _a_texto_plano(mensaje),
+                'disable_web_page_preview': True
+            }
+            r2 = requests.post(url, json=payload_plain, timeout=10)
+            print(f"DBG:telegram fallback status={r2.status_code} body={(r2.text or '')[:300]}")
+            r2.raise_for_status()
+            return
+
+        # Otros errores comunes: chat id, bot bloqueado, etc.
+        if "chat not found" in body.lower():
+            logging.error("Verifica TELEGRAM_CHAT_ID: ¿es el chat correcto y el bot está dentro del chat?")
+        if "bot was blocked" in body.lower():
+            logging.error("El usuario bloqueó al bot.")
+        if "message is too long" in body.lower():
+            logging.error("Mensaje supera 4096 caracteres; recórtalo.")
+
+        r.raise_for_status()
+
     except requests.exceptions.RequestException as e:
         logging.error(f"Error enviando a Telegram: {str(e)}")
         print("DBG:EXC telegram", traceback.format_exc())
     except Exception as e:
         logging.error(f"Error inesperado en Telegram: {str(e)}")
         print("DBG:EXC telegram", traceback.format_exc())
+
+
+def _a_texto_plano(m: str) -> str:
+    """Convierte un HTML mínimo a texto plano para fallback."""
+    # Quita etiquetas básicas y desescapa lo necesario
+    repl = (
+        ("<b>", ""), ("</b>", ""),
+        ("<i>", ""), ("</i>", ""),
+        ("<u>", ""), ("</u>", ""),
+        ("<code>", "`"), ("</code>", "`"),
+        ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")
+    )
+    out = m
+    for a, b in repl:
+        out = out.replace(a, b)
+    return out
 
 # --- Endpoints --------------------------------------------------------------
 
@@ -419,9 +462,10 @@ def resumen():
 
                 rsi_val = indicadores.get("rsi")
                 if rsi_val is not None:
+                    # [L~510] — línea RSI del mensaje
                     mensaje += f"📈 <b>RSI:</b> {rsi_val} "
-                    mensaje += f"(Compra<{indicadores.get('rsi_umbral_compra','?')}, "
-                    mensaje += f"Venta>{indicadores.get('rsi_umbral_venta','?')})\n"
+                    mensaje += f"<code>(Compra<{indicadores.get('rsi_umbral_compra','?')}, "
+                    mensaje += f"Venta>{indicadores.get('rsi_umbral_venta','?')})</code>\n"
                 else:
                     mensaje += "📈 <b>RSI:</b> No disponible\n"
 
