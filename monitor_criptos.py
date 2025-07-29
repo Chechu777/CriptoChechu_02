@@ -1,12 +1,14 @@
 import os
 import requests
 import numpy as np
+import pandas as pd  # Nueva importación
 from flask import Flask
 from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
 import logging
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -267,17 +269,43 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         }
 
 def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
-    """Calcula el MACD y su línea de señal"""
-    if len(cierres) < periodo_largo + periodo_senal:
+    """Calcula el MACD y su línea de señal sin dependencia de pandas"""
+    try:
+        if len(cierres) < periodo_largo + periodo_senal:
+            return None, None, None
+        
+        # Convertir a numpy array si es necesario
+        if not isinstance(cierres, np.ndarray):
+            cierres = np.array(cierres, dtype=np.float64)
+        
+        # Calcular EMAs manualmente
+        def calcular_ema(values, period):
+            ema = np.zeros_like(values)
+            ema[0] = values[0]
+            alpha = 2 / (period + 1)
+            
+            for i in range(1, len(values)):
+                ema[i] = alpha * values[i] + (1 - alpha) * ema[i-1]
+            
+            return ema[-1]  # Devolver solo el último valor
+        
+        ema_larga = calcular_ema(cierres, periodo_largo)
+        ema_corta = calcular_ema(cierres, periodo_corto)
+        macd_line = ema_corta - ema_larga
+        
+        # Calcular EMA del MACD (línea de señal)
+        macd_values = np.array([calcular_ema(cierres[max(0, i-periodo_corto+1):i+1], periodo_corto) - 
+                      calcular_ema(cierres[max(0, i-periodo_largo+1):i+1], periodo_largo)
+                      for i in range(len(cierres))])
+        
+        signal_line = calcular_ema(macd_values, periodo_senal)
+        histograma = macd_line - signal_line
+        
+        return macd_line, signal_line, histograma
+    
+    except Exception as e:
+        logging.error(f"Error calculando MACD: {str(e)}")
         return None, None, None
-    
-    ema_larga = pd.Series(cierres).ewm(span=periodo_largo, adjust=False).mean()
-    ema_corta = pd.Series(cierres).ewm(span=periodo_corto, adjust=False).mean()
-    macd_line = ema_corta - ema_larga
-    signal_line = macd_line.ewm(span=periodo_senal, adjust=False).mean()
-    histograma = macd_line - signal_line
-    
-    return macd_line.iloc[-1], signal_line.iloc[-1], histograma.iloc[-1]
 
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores"""
