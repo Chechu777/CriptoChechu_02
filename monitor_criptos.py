@@ -43,11 +43,19 @@ MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
 HORAS_HISTORICO = 48
 
-# Sensibilidades MACD (se pueden ajustar por entorno)
-MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)            # 0.5σ por defecto
-MACD_SIGMA_K_TEND = _env_float("MACD_SIGMA_K_TEND", 0.35) # 0.35σ si coincide con tendencia
-PENDIENTE_UMBRAL_REL = _env_float("PENDIENTE_UMBRAL_REL", 0.0005)  # 0.05%
+# Sensibilidades MACD / tendencia
+MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)
+MACD_SIGMA_K_TEND = _env_float("MACD_SIGMA_K_TEND", 0.35)
+PENDIENTE_UMBRAL_REL = _env_float("PENDIENTE_UMBRAL_REL", 0.0005)
+
+# Opciones de compra “casi cruce” y “dip”
 PERMITIR_COMPRA_CASI_CRUCE = _env_bool("PERMITIR_COMPRA_CASI_CRUCE", False)
+PERMITIR_COMPRA_DIP = _env_bool("PERMITIR_COMPRA_DIP", False)
+DIP_PCT = _env_float("DIP_PCT", 4.0)  # %
+DIP_LOOKBACK_PUNTOS = int(_env_float("DIP_LOOKBACK_PUNTOS", 24))
+ZSCORE_DIP = _env_float("ZSCORE_DIP", -1.5)
+COMPRA_PARCIAL_PCT = _env_float("COMPRA_PARCIAL_PCT", 0.25)
+ZSCORE_TAKEPROFIT = _env_float("ZSCORE_TAKEPROFIT", 1.5)  # opcional
 
 # --- Supabase ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -169,8 +177,20 @@ def calcular_confianza(historico, rsi, macd, macd_signal):
     except Exception:
         return 1
 
+def _zscore_ultima(cierres, ventana=20):
+    h = np.asarray(cierres, dtype=np.float64)
+    if len(h) < max(5, ventana):
+        return None, None, None  # z, media, std
+    sub = h[-ventana:]
+    mu = float(np.mean(sub))
+    sd = float(np.std(sub))
+    if sd <= 0:
+        return 0.0, mu, sd
+    z = float((h[-1] - mu) / sd)
+    return z, mu, sd
+
 def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
-    """Señal combinada RSI + MACD(σ) + tendencia + persistencia."""
+    """Señal combinada RSI + MACD(σ) + tendencia + persistencia + métricas DIP."""
     try:
         if rsi is None or historico is None or len(historico) < 35:
             return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
@@ -226,6 +246,14 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
 
             print(f"DBG:macd_ref delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend}")
 
+        # Métricas DIP
+        z, ma20, sd20 = _zscore_ultima(h, ventana=20)
+        look = min(max(5, DIP_LOOKBACK_PUNTOS), len(h))
+        max_ventana = float(np.max(h[-look:])) if look > 0 else float(np.max(h))
+        dd_pct = 0.0
+        if max_ventana > 0:
+            dd_pct = (max_ventana - float(h[-1])) / max_ventana * 100.0
+
         # Desempate suave
         if senal == "NEUTRO" and macd is not None and macd_signal is not None:
             if tendencia == "BAJA" and rsi < 45 and macd < macd_signal:
@@ -243,19 +271,24 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
            "macd_signal_raw": float(macd_signal) if macd_signal is not None else None,
            "rsi_umbral_compra": round(rsi_sobreventa, 2),
            "rsi_umbral_venta": round(rsi_sobrecompra, 2),
-           # Para “≈”
            "macd_delta": float(delta) if (macd is not None and macd_signal is not None) else None,
            "macd_vol": float(vol) if (macd is not None and macd_signal is not None) else None,
+           # DIP / Bollinger
+           "zscore20": float(z) if z is not None else None,
+           "ma20": float(ma20) if ma20 is not None else None,
+           "std20": float(sd20) if sd20 is not None else None,
+           "drawdown_pct": round(dd_pct, 2),
+           "lookback_puntos": int(look),
         }
 
-        print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza}")
+        print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza} dd={dd_pct:.2f}% z={z}")
         return {"señal": senal, "confianza": confianza, "tendencia": tendencia, "indicadores": indicadores}
     except Exception:
         logging.error("Error en generar_señal_rsi", exc_info=True)
         print("DBG:EXC generar_señal_rsi", traceback.format_exc())
         return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
 
-# --- Opción A: recomendar_accion con “casi cruce” controlado por env var ---
+# --- Recomendación final (casi cruce + DIP + take-profit opcional) ---
 def recomendar_accion(
     senal: str,
     rsi: float | None,
@@ -264,41 +297,59 @@ def recomendar_accion(
     confianza: int,
     macd_delta: float | None = None,
     macd_vol: float | None = None,
-    tendencia: str | None = None
+    tendencia: str | None = None,
+    zscore: float | None = None,
+    drawdown_pct: float | None = None
 ) -> str:
-    """Recomendación condicionada a confirmación MACD, con opción de 'casi cruce' para compra parcial."""
+    """Recomendación con confirmación MACD, 'casi cruce' y 'compra parcial por dip'."""
     try:
         def confirma_compra():
             return macd is not None and macd_signal is not None and macd > macd_signal
         def confirma_venta():
             return macd is not None and macd_signal is not None and macd < macd_signal
 
-        # Umbral “casi cruce”: 10% del umbral base que ya se usa en el análisis
+        # Umbral “casi cruce”: 10% del umbral base
         eps = None
         if macd_delta is not None and macd_vol is not None:
             eps = 0.1 * MACD_SIGMA_K * max(1e-12, macd_vol)
+        casi = (eps is not None and macd_delta is not None and abs(macd_delta) < eps)
 
+        # Señal take-profit opcional por sobre-extensión
+        if zscore is not None and ZSCORE_TAKEPROFIT is not None and zscore >= ZSCORE_TAKEPROFIT:
+            if (rsi is not None and rsi > 65) or confirma_venta():
+                return "🟡 Podrías tomar ganancias parciales (sobre-extensión)"
+
+        # Compra/venta según señal base + confirmaciones
         if senal == "COMPRA":
             if confirma_compra():
-                txt = "🟢 Podrías comprar" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
-            else:
-                casi = (eps is not None and abs(macd_delta) < eps and (tendencia != "BAJA"))
-                if PERMITIR_COMPRA_CASI_CRUCE and casi:
-                    txt = "🟡 Podrías comprar en pequeña cantidad (casi cruza)"
-                else:
-                    txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
+                return "🟢 Podrías comprar" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
+            # Casi cruce (solo si está activado y tendencia no es BAJA)
+            if PERMITIR_COMPRA_CASI_CRUCE and casi and tendencia != "BAJA":
+                return "🟡 Podrías comprar en pequeña cantidad (casi cruza)"
+            return "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
+
         elif senal == "VENTA":
             if confirma_venta():
-                txt = "🔴 Podrías vender" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
-            else:
-                txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
-        elif senal == "NEUTRO":
-            txt = "⚪ Quieto chato, no hagas huevadas"
-        else:
-            txt = "ℹ️ Sin datos suficientes para recomendar"
+                return "🔴 Podrías vender" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
+            # DIP: si hay caída fuerte y sobre-extensión a la baja, sugiere compra parcial aunque la señal base sea VENTA
+            if PERMITIR_COMPRA_DIP and drawdown_pct is not None and zscore is not None:
+                if drawdown_pct >= DIP_PCT and (zscore <= ZSCORE_DIP or (rsi is not None and rsi < 38) or casi):
+                    return f"🟡 Podrías comprar en pequeña cantidad (dip {COMPRA_PARCIAL_PCT*100:.0f}%)"
+            return "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
 
-        print(f"DBG:reco senal={senal} macd={macd} sig={macd_signal} delta={macd_delta} eps={eps} tend={tendencia} conf={confianza} -> {txt}")
-        return txt
+        elif senal == "NEUTRO":
+            # NEUTRO + DIP
+            if PERMITIR_COMPRA_DIP and drawdown_pct is not None and zscore is not None:
+                if drawdown_pct >= DIP_PCT and (zscore <= ZSCORE_DIP or (rsi is not None and rsi < 38) or (casi and tendencia != "BAJA")):
+                    return f"🟡 Podrías comprar en pequeña cantidad (dip {COMPRA_PARCIAL_PCT*100:.0f}%)"
+            # NEUTRO + casi cruce (si no es BAJA)
+            if PERMITIR_COMPRA_CASI_CRUCE and casi and tendencia != "BAJA":
+                return "🟡 Podrías comprar en pequeña cantidad (casi cruza)"
+            return "⚪ Quieto chato, no hagas huevadas"
+
+        else:
+            return "ℹ️ Sin datos suficientes para recomendar"
+
     except Exception:
         return "ℹ️ Sin datos suficientes para recomendar"
 
@@ -459,7 +510,7 @@ def resumen():
                 señal = generar_señal_rsi(rsi, precio, historicos)
                 insertar_precio(moneda, precio, rsi)
 
-                # --- Variables de indicadores ---
+                # --- Indicadores ---
                 ind = señal.get("indicadores") or {}
                 rsi_val      = ind.get("rsi")
                 macd_val     = ind.get("macd")
@@ -470,6 +521,8 @@ def resumen():
                 tend_txt     = señal.get("tendencia", "?")
                 delta        = ind.get("macd_delta")
                 vol          = ind.get("macd_vol")
+                zscore       = ind.get("zscore20")
+                dd_pct       = ind.get("drawdown_pct")
 
                 # --- Mensaje ---
                 mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
@@ -484,7 +537,6 @@ def resumen():
                     comp_sig   = macd_sig_raw if macd_sig_raw is not None else macd_sig
                     macd_trend = "↑" if comp_macd > comp_sig else "↓"
 
-                    # “≈” relativo a la volatilidad
                     eps = None
                     if delta is not None and vol is not None:
                         eps = 0.1 * MACD_SIGMA_K * max(1e-12, vol)
@@ -493,11 +545,14 @@ def resumen():
                 else:
                     mensaje += "📊 <b>MACD:</b> No disponible\n"
 
+                if zscore is not None and dd_pct is not None:
+                    mensaje += f"📉 <b>DIP:</b> caída {dd_pct:.2f}% | z-score {zscore:.2f}\n"
+
                 mensaje += f"🔄 <b>Tendencia:</b> {tend_txt}\n"
                 mensaje += f"🎯 <b>Señal:</b> <u>{señal.get('señal','?')}</u>\n"
                 mensaje += f"🔍 <b>Confianza:</b> {'★'*conf}{'☆'*(5-conf)} ({conf}/5)\n"
 
-                # Recomendación (ahora con “casi cruce”, opción A)
+                # Recomendación final (con DIP / casi cruce / take-profit)
                 reco = recomendar_accion(
                     señal.get("señal"),
                     rsi_val,
@@ -506,7 +561,9 @@ def resumen():
                     conf,
                     macd_delta=delta,
                     macd_vol=vol,
-                    tendencia=tend_txt
+                    tendencia=tend_txt,
+                    zscore=zscore,
+                    drawdown_pct=dd_pct
                 )
                 mensaje += f"🤖 <b>Recomendación:</b> {reco}\n\n"
 
