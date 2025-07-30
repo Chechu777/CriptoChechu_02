@@ -3,98 +3,57 @@
 import os
 import requests
 import numpy as np
-import pandas as pd  # por si lo necesitas luego
 from flask import Flask
 from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
-from dateutil.parser import isoparse
+from dateutil.parser import isoparse  # (no usado, quítalo si quieres)
 import logging
 import traceback
 
-# [L~20] Logging básico
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()] )
+# --- Logging ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s",
+                    handlers=[logging.StreamHandler()])
 
-# [L~21] Flask
+# --- Flask ---
 app = Flask(__name__)
-application = app  # Alias para Render
+application = app  # Render
 
-# [L~35] Entorno
+# --- Entorno ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
-# [L~32] Constantes
+# --- Constantes ---
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
 HORAS_HISTORICO = 48
-MINUTOS_ENTRE_REGISTROS = 55  # reservado
 
-# [L~38] Supabase
+def _env_float(key, default):
+    try:
+        return float(os.getenv(key, default))
+    except Exception:
+        return float(default)
+
+MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)           # umbral base (0.5σ)
+MACD_SIGMA_K_TEND = _env_float("MACD_SIGMA_K_TEND", 0.35) # si coincide con tendencia
+PENDIENTE_UMBRAL_REL = _env_float("PENDIENTE_UMBRAL_REL", 0.0005)  # 0.05%
+
+# --- Supabase ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Utilidades -------------------------------------------------------------
-# [L~44]
+# --- Utilidades ---
 def ahora_madrid():
     return datetime.now(ZoneInfo("Europe/Madrid"))
 
-# [L~46]
 def formatear_fecha(fecha):
     return fecha.strftime("%d/%m/%Y %H:%M")
 
-# [L~50]
-def parsear_fecha_supabase(fecha_str):
-    """Conversión robusta de fechas desde Supabase"""
-    try:
-        if '.' in fecha_str:
-            partes = fecha_str.split('.')
-            fecha_str = partes[0] + ('.' + partes[1][:6] if len(partes) > 1 else '')
-        dt = isoparse(fecha_str)
-        return dt.astimezone(ZoneInfo("Europe/Madrid"))
-    except Exception as e:
-        logging.error(f"Error parseando fecha {fecha_str}: {str(e)}")
-        return ahora_madrid()
-
-# --- Indicadores ------------------------------------------------------------
-# [L~64]
-def calcular_confianza(historico, rsi, macd, macd_signal):
-    try:
-        h = np.asarray(historico, dtype=np.float64) if historico is not None else None
-        if rsi is None or macd is None or macd_signal is None or h is None or len(h) < 27:
-            print(f"DBG:confianza datos_insuf rsi={rsi} macd={macd} sig={macd_signal}")
-            return 1
-
-        delta = macd - macd_signal
-        difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
-        vol = np.std(difs)
-        relevante = abs(delta) > 0.5 * max(1e-12, vol)
-        tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
-        conf = 2  # base
-        # RSI extremo
-        if rsi < 30 or rsi > 70:
-            conf += 1
-        # MACD confirma lado del RSI
-        if (rsi < 50 and delta > 0) or (rsi > 50 and delta < 0):
-            conf += 1
-        # Cruce relevante
-        if relevante:
-            conf += 1
-        # Penaliza si tendencia contradice el cruce
-        if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0):
-            conf = max(1, conf - 1)
-        conf = int(max(1, min(5, conf)))
-        print(f"DBG:confianza rsi={rsi} delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend} -> {conf}")
-        return conf
-    except Exception:
-        return 1
-# [L~104]
+# --- Indicadores ---
 def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
-    """RSI de Wilder con manejo de edge cases."""
+    """RSI de Wilder."""
     if cierres is None:
         return None
     try:
@@ -104,12 +63,8 @@ def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
         deltas = np.diff(c)
         ganancias = np.clip(deltas, 0, None)
         perdidas = np.clip(-deltas, 0, None)
-
-        # Promedios iniciales
         avg_gain = np.mean(ganancias[:periodo])
         avg_loss = np.mean(perdidas[:periodo])
-
-        # Suavizado Wilder
         for i in range(periodo, len(deltas)):
             avg_gain = (avg_gain * (periodo - 1) + ganancias[i]) / periodo
             avg_loss = (avg_loss * (periodo - 1) + perdidas[i]) / periodo
@@ -118,62 +73,52 @@ def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
         else:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
-        rsi = round(float(np.clip(rsi, 0, 100)), 2)
+        rsi = float(np.clip(rsi, 0, 100))
+        rsi = round(rsi, 2)
         print(f"DBG:rsi(wilder) valor={rsi}")
         return rsi
-    except Exception as e:
-        logging.error(f"Error calculando RSI: {str(e)}")
+    except Exception:
+        logging.error("Error calculando RSI", exc_info=True)
         return None
-# [L~136]
+
 def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
-    """Calcula MACD usando numpy"""
+    """MACD clásico con EMAs."""
     try:
         if len(cierres) < periodo_largo + periodo_senal:
             return None, None, None
+        c = np.array(cierres, dtype=np.float64)
 
-        cierres = np.array(cierres, dtype=np.float64)
-
-        def calcular_ema(data, period):
+        def ema(data, period):
             if len(data) < period:
                 return np.mean(data)
             alpha = 2 / (period + 1)
-            ema = np.zeros_like(data)
-            ema[0] = data[0]
+            e = np.zeros_like(data)
+            e[0] = data[0]
             for i in range(1, len(data)):
-                ema[i] = alpha * data[i] + (1 - alpha) * ema[i - 1]
-            return ema[-1]
+                e[i] = alpha * data[i] + (1 - alpha) * e[i - 1]
+            return e[-1]
 
-        ema_corta = calcular_ema(cierres, periodo_corto)
-        ema_larga = calcular_ema(cierres, periodo_largo)
-        macd_line = ema_corta - ema_larga
+        ema_c = ema(c, periodo_corto)
+        ema_l = ema(c, periodo_largo)
+        macd_line = ema_c - ema_l
 
         macd_values = []
-        for i in range(periodo_corto, len(cierres)):
-            ema_c = calcular_ema(cierres[:i + 1], periodo_corto)
-            ema_l = calcular_ema(cierres[:i + 1], periodo_largo)
-            macd_values.append(ema_c - ema_l)
+        for i in range(periodo_corto, len(c)):
+            macd_values.append(ema(c[: i + 1], periodo_corto) - ema(c[: i + 1], periodo_largo))
 
-        if len(macd_values) >= periodo_senal:
-            signal_line = calcular_ema(np.array(macd_values), periodo_senal)
-        else:
-            signal_line = macd_line
-
-        histograma = macd_line - signal_line
-        print(f"DBG:macd macd={macd_line:.5f} signal={signal_line:.5f} hist={histograma:.5f}")
-        return macd_line, signal_line, histograma
-    except Exception as e:
-        logging.error(f"Error calculando MACD: {str(e)}")
+        signal_line = ema(np.array(macd_values), periodo_senal) if len(macd_values) >= periodo_senal else macd_line
+        hist = macd_line - signal_line
+        print(f"DBG:macd macd={macd_line:.6f} signal={signal_line:.6f} hist={hist:.6f}")
+        return macd_line, signal_line, hist
+    except Exception:
+        logging.error("Error calculando MACD", exc_info=True)
         return None, None, None
-# [L~161]
-def _tendencia_por_pendiente(historico, puntos=12, umbral_rel=0.0005):
-    """
-    Evalúa la pendiente de los últimos 'puntos' cierres.
-    umbral_rel ~0.05% del precio medio: ALZA/BAJA; si no, PLANA.
-    """
+
+def _tendencia_por_pendiente(historico, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL):
+    """Pendiente de últimos 'puntos' cierres => ALZA/BAJA/PLANA."""
     h = np.asarray(historico[-max(5, puntos):], dtype=np.float64)
-    y = h
     x = np.arange(len(h), dtype=np.float64)
-    m, b = np.polyfit(x, y, 1)
+    m, _ = np.polyfit(x, h, 1)
     rel = m / max(1e-12, np.mean(h))
     if rel > umbral_rel:
         return "ALZA"
@@ -181,25 +126,48 @@ def _tendencia_por_pendiente(historico, puntos=12, umbral_rel=0.0005):
         return "BAJA"
     return "PLANA"
 
-# [L~193]
-def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
+def calcular_confianza(historico, rsi, macd, macd_signal):
+    """1–5 estrellas con MACD vs σ, RSI y tendencia."""
     try:
-        if rsi is None or historico is None or len(historico) < 35:  # asegurar MACD
+        h = np.asarray(historico, dtype=np.float64) if historico is not None else None
+        if rsi is None or macd is None or macd_signal is None or h is None or len(h) < 27:
+            print(f"DBG:confianza datos_insuf rsi={rsi} macd={macd} sig={macd_signal}")
+            return 1
+        delta = macd - macd_signal
+        difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
+        vol = np.std(difs)
+        relevante = abs(delta) > MACD_SIGMA_K * max(1e-12, vol)
+        tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
+        conf = 2
+        if rsi < 30 or rsi > 70:
+            conf += 1
+        if (rsi < 50 and delta > 0) or (rsi > 50 and delta < 0):
+            conf += 1
+        if relevante:
+            conf += 1
+        if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0):
+            conf = max(1, conf - 1)
+        conf = int(max(1, min(5, conf)))
+        print(f"DBG:confianza rsi={rsi} delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend} -> {conf}")
+        return conf
+    except Exception:
+        return 1
+
+def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
+    """Señal combinada RSI + MACD (relativo a σ) + tendencia."""
+    try:
+        if rsi is None or historico is None or len(historico) < 35:
             return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
 
         h = np.asarray(historico, dtype=np.float64)
-        macd, macd_signal, hist = calcular_macd(h)
+        macd, macd_signal, _ = calcular_macd(h)
+        tendencia = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
 
-        # Tendencia por pendiente (más fiel que medias cortas/largas simples)
-        tendencia = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
-
-        # Umbral dinámico RSI (cap ±5 máx)
         volatilidad = np.std(h[-10:]) / max(1e-12, np.mean(h[-10:]))
-        ajuste = min(volatilidad * 20, 5)  # antes 40 y cap 15 -> demasiado ancho
-        rsi_sobrecompra = 70 - ajuste/2
-        rsi_sobreventa  = 30 + ajuste/2
+        ajuste = min(volatilidad * 20, 5)
+        rsi_sobrecompra = 70 - ajuste / 2
+        rsi_sobreventa = 30 + ajuste / 2
 
-        # Señal base por RSI
         if rsi < rsi_sobreventa:
             senal_rsi = "COMPRA"
         elif rsi > rsi_sobrecompra:
@@ -207,275 +175,201 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         else:
             senal_rsi = "NEUTRO"
 
-        # --- Refuerzo por MACD con filtro de magnitud ---
-                # --- Refuerzo por MACD con filtro de magnitud relativo a la volatilidad ---
+        # Refuerzo por MACD con umbral relativo a σ
         senal = senal_rsi
-        macd_ok = (macd is not None and macd_signal is not None)
-        if macd_ok:
+        if macd is not None and macd_signal is not None:
             delta = macd - macd_signal
-
-            # Volatilidad de las últimas 26 diferencias de precio (escala comparable)
-            if len(h) >= 27:
-                difs = np.diff(h[-27:])
-            else:
-                difs = np.diff(h)
-            vol = np.std(difs)  # σ en unidades de precio
-
-            # Umbral adaptativo: 0.5σ
-            relevante = abs(delta) > 0.5 * max(1e-12, vol)
-
-            # Empate a favor de la tendencia: si coincide, baja umbral a 0.35σ
-            tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
+            difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
+            vol = np.std(difs)
+            relevante = abs(delta) > MACD_SIGMA_K * max(1e-12, vol)
+            tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
             if tend == "ALZA" and delta > 0:
-                relevante = abs(delta) > 0.35 * max(1e-12, vol)
+                relevante = abs(delta) > MACD_SIGMA_K_TEND * max(1e-12, vol)
             if tend == "BAJA" and delta < 0:
-                relevante = abs(delta) > 0.35 * max(1e-12, vol)
-
-            # Si es relevante, deja que MACD incline la balanza
+                relevante = abs(delta) > MACD_SIGMA_K_TEND * max(1e-12, vol)
             if relevante:
                 if delta > 0 and rsi > 35:
                     senal = "COMPRA" if senal_rsi != "VENTA" else senal_rsi
                 elif delta < 0 and rsi < 65:
                     senal = "VENTA" if senal_rsi != "COMPRA" else senal_rsi
             print(f"DBG:macd_ref delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend}")
+
         confianza = calcular_confianza(h, rsi, macd, macd_signal)
         indicadores = {
             "rsi": round(rsi, 2),
             "macd": round(macd, 6) if macd is not None else None,
             "macd_signal": round(macd_signal, 6) if macd_signal is not None else None,
             "rsi_umbral_compra": round(rsi_sobreventa, 2),
-            "rsi_umbral_venta": round(rsi_sobrecompra, 2)}
+            "rsi_umbral_venta": round(rsi_sobrecompra, 2),
+        }
         print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza}")
         return {"señal": senal, "confianza": confianza, "tendencia": tendencia, "indicadores": indicadores}
-    except Exception as e:
-        logging.error(f"Error en generar_señal_rsi: {str(e)}", exc_info=True)
+    except Exception:
+        logging.error("Error en generar_señal_rsi", exc_info=True)
         print("DBG:EXC generar_señal_rsi", traceback.format_exc())
         return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
-# [L~255]
+
 def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_signal: float | None, confianza: int) -> str:
-    """
-    Recomendación condicionada a confirmación MACD:
-      - COMPRA  -> requiere macd > macd_signal
-      - VENTA   -> requiere macd < macd_signal
-      - Si no hay confirmación o datos, se recomienda esperar.
-    """
+    """Recomendación condicionada a confirmación MACD."""
     try:
         def confirma_compra():
             return macd is not None and macd_signal is not None and macd > macd_signal
-
         def confirma_venta():
             return macd is not None and macd_signal is not None and macd < macd_signal
 
         if senal == "COMPRA":
             if confirma_compra():
-                txt = "🟢 Podrías comprar"
-                if confianza >= 4:
-                    txt += " (señal fuerte)"
-                elif confianza <= 2:
-                    txt += " (señal débil)"
+                txt = "🟢 Podrías comprar" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
             else:
                 txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
-
         elif senal == "VENTA":
             if confirma_venta():
-                txt = "🔴 Podrías vender"
-                if confianza >= 4:
-                    txt += " (señal fuerte)"
-                elif confianza <= 2:
-                    txt += " (señal débil)"
+                txt = "🔴 Podrías vender" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
             else:
                 txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
-
         elif senal == "NEUTRO":
             txt = "⚪ Quieto chato, no hagas huevadas"
         else:
             txt = "ℹ️ Sin datos suficientes para recomendar"
-
         print(f"DBG:reco senal={senal} macd={macd} sig={macd_signal} conf={confianza} -> {txt}")
         return txt
-
     except Exception:
         return "ℹ️ Sin datos suficientes para recomendar"
 
-# --- IO: APIs / DB ----------------------------------------------------------
-# [L~302]
+# --- IO: APIs / DB ---
 def obtener_precios_actuales():
     """CoinMarketCap EUR"""
     try:
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        params = {'symbol': ','.join(MONEDAS), 'convert': 'EUR'}
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': CMC_API_KEY}
-
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        datos = response.json()
-
+        params = {"symbol": ",".join(MONEDAS), "convert": "EUR"}
+        headers = {"Accepts": "application/json", "X-CMC_PRO_API_KEY": CMC_API_KEY}
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        datos = r.json()
         precios = {}
-        for moneda in MONEDAS:
+        for m in MONEDAS:
             try:
-                precio = float(datos['data'][moneda]['quote']['EUR']['price'])
+                precio = float(datos["data"][m]["quote"]["EUR"]["price"])
                 if precio <= 0:
                     raise ValueError("Precio no positivo")
-                precios[moneda] = precio
+                precios[m] = precio
             except (KeyError, ValueError) as e:
-                logging.error(f"Error procesando {moneda}: {str(e)}")
+                logging.error(f"Error procesando {m}: {e}")
                 return None
-
         print(f"DBG:precios {precios}")
         return precios
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error API CoinMarketCap: {str(e)}")
+    except requests.exceptions.RequestException:
+        logging.error("Error API CoinMarketCap", exc_info=True)
         return None
 
-# [L~331]
 def obtener_precios_historicos(nombre: str):
-    """Recupera precios históricos recientes desde Supabase"""
+    """Histórico reciente desde Supabase."""
     try:
         fecha_limite = ahora_madrid() - timedelta(hours=HORAS_HISTORICO)
-        response = supabase.table("precios").select(
-            "precio, fecha"
-        ).eq("nombre", nombre
-        ).gte("fecha", fecha_limite.strftime("%Y-%m-%d %H:%M:%S")
-        ).order("fecha", desc=False
-        ).limit(max(60, INTERVALO_RSI * 5)).execute()
-
-        logging.info(f"Datos crudos de Supabase para {nombre}: {response.data}")
-
-        if not response.data:
+        resp = supabase.table("precios").select("precio, fecha") \
+            .eq("nombre", nombre) \
+            .gte("fecha", fecha_limite.strftime("%Y-%m-%d %H:%M:%S")) \
+            .order("fecha", desc=False) \
+            .limit(max(60, INTERVALO_RSI * 5)).execute()
+        data = resp.data
+        logging.info(f"Datos crudos de Supabase para {nombre}: {data}")
+        if not data:
             return None
-
-        precios_validos = []
-        for reg in response.data:
+        precios = []
+        for reg in data:
             try:
-                precio = float(reg['precio'])
-                if precio > 0:
-                    precios_validos.append(precio)
+                p = float(reg["precio"])
+                if p > 0:
+                    precios.append(p)
             except (ValueError, TypeError):
                 continue
-
-        arr = np.array(precios_validos) if precios_validos else None
+        arr = np.array(precios) if precios else None
         print(f"DBG:historico {nombre} n={len(arr) if arr is not None else 0}")
         return arr
-    except Exception as e:
-        logging.error(f"Error obteniendo históricos: {str(e)}")
+    except Exception:
+        logging.error("Error obteniendo históricos", exc_info=True)
         return None
 
-# [L~364]
 def insertar_precio(nombre: str, precio: float, rsi: float = None):
-    """Inserta datos en Supabase con logging detallado"""
+    """Inserta datos en Supabase."""
     try:
         if not isinstance(precio, (int, float)) or precio <= 0:
             raise ValueError("Precio inválido")
-
         datos = {
             "nombre": nombre,
             "precio": float(precio),
             "rsi": float(rsi) if rsi is not None else None,
-            "fecha": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
+            "fecha": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f"),
         }
-
-        response = supabase.table("precios").insert(datos).execute()
-
-        if response.data:
+        resp = supabase.table("precios").insert(datos).execute()
+        if resp.data:
             logging.info(f"Insertado {nombre}: Precio={precio:.8f} | RSI={rsi if rsi is not None else 'NULL'}")
             print(f"DBG:insert {nombre} ok")
             return True
-        else:
-            logging.warning(f"Respuesta inesperada de Supabase: {response}")
-            print(f"DBG:insert {nombre} sin data")
-            return False
-    except Exception as e:
-        logging.error(f"Error insertando {nombre}: {str(e)}", exc_info=True)
+        logging.warning(f"Respuesta inesperada de Supabase: {resp}")
+        print(f"DBG:insert {nombre} sin data")
+        return False
+    except Exception:
+        logging.error(f"Error insertando {nombre}", exc_info=True)
         print("DBG:EXC insertar_precio", traceback.format_exc())
         return False
 
-# --- Telegram ---------------------------------------------------------------
-# [L~394]
+# --- Telegram ---
 def enviar_telegram(mensaje: str):
     """Envía mensaje a Telegram con manejo de errores y fallback."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload_html = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': mensaje,
-        'parse_mode': 'HTML',
-        'disable_web_page_preview': True
-    }
+    payload_html = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         r = requests.post(url, json=payload_html, timeout=10)
         if r.status_code == 200:
             print("DBG:telegram enviado OK (HTML)")
             return
-        # Log detallado
         body = (r.text or "")[:500]
         logging.error(f"Telegram {r.status_code}: {body}")
         print(f"DBG:telegram resp={r.status_code} body={body}")
-
-        # Fallback si es error de parseo HTML
         if "parse" in body.lower() or "entity" in body.lower():
-            payload_plain = {
-                'chat_id': TELEGRAM_CHAT_ID,
-                'text': _a_texto_plano(mensaje),
-                'disable_web_page_preview': True
-            }
+            payload_plain = {"chat_id": TELEGRAM_CHAT_ID, "text": _a_texto_plano(mensaje), "disable_web_page_preview": True}
             r2 = requests.post(url, json=payload_plain, timeout=10)
             print(f"DBG:telegram fallback status={r2.status_code} body={(r2.text or '')[:300]}")
             r2.raise_for_status()
             return
-
-        # Otros errores comunes: chat id, bot bloqueado, etc.
         if "chat not found" in body.lower():
-            logging.error("Verifica TELEGRAM_CHAT_ID: ¿es el chat correcto y el bot está dentro del chat?")
+            logging.error("Verifica TELEGRAM_CHAT_ID.")
         if "bot was blocked" in body.lower():
             logging.error("El usuario bloqueó al bot.")
         if "message is too long" in body.lower():
             logging.error("Mensaje supera 4096 caracteres; recórtalo.")
-
         r.raise_for_status()
-
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error enviando a Telegram: {str(e)}")
+    except requests.exceptions.RequestException:
+        logging.error("Error enviando a Telegram", exc_info=True)
         print("DBG:EXC telegram", traceback.format_exc())
-    except Exception as e:
-        logging.error(f"Error inesperado en Telegram: {str(e)}")
+    except Exception:
+        logging.error("Error inesperado en Telegram", exc_info=True)
         print("DBG:EXC telegram", traceback.format_exc())
 
-# [L~443]
 def _a_texto_plano(m: str) -> str:
     """Convierte un HTML mínimo a texto plano para fallback."""
-    # Quita etiquetas básicas y desescapa lo necesario
-    repl = (
-        ("<b>", ""), ("</b>", ""),
-        ("<i>", ""), ("</i>", ""),
-        ("<u>", ""), ("</u>", ""),
-        ("<code>", "`"), ("</code>", "`"),
-        ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")
-    )
+    repl = (("<b>", ""), ("</b>", ""), ("<i>", ""), ("</i>", ""), ("<u>", ""), ("</u>", ""),
+            ("<code>", "`"), ("</code>", "`"), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&"))
     out = m
     for a, b in repl:
         out = out.replace(a, b)
     return out
 
-# --- Endpoints --------------------------------------------------------------
-# [L~460]
+# --- Endpoints ---
 @app.route("/")
 def home():
     return "Bot de Monitoreo Cripto - Endpoints: /health, /resumen", 200
 
-# [L~465]
 @app.route("/health")
 def health_check():
     try:
-        supabase.table("precios").select("count", count='exact').limit(1).execute()
-        return {
-            "status": "healthy",
-            "supabase": "connected",
-            "timestamp": ahora_madrid().isoformat()
-        }, 200
+        supabase.table("precios").select("count", count="exact").limit(1).execute()
+        return {"status": "healthy", "supabase": "connected", "timestamp": ahora_madrid().isoformat()}, 200
     except Exception as e:
-        logging.error(f"Health check failed: {str(e)}")
+        logging.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}, 500
 
-# [L~479]
 @app.route("/resumen")
 def resumen():
     try:
@@ -484,41 +378,33 @@ def resumen():
             enviar_telegram("⚠️ <b>Error crítico:</b> No se pudieron obtener los precios actuales")
             return "Error al obtener precios", 500
 
-        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n"
-        mensaje += "════════════════════════\n\n"
+        mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n════════════════════════\n\n"
         ahora = ahora_madrid()
+
         for moneda in MONEDAS:
             try:
                 precio = precios[moneda]
                 historicos = obtener_precios_historicos(moneda)
-                # Si no hay histórico suficiente, informa y sigue
                 if historicos is None or len(historicos) < 10:
-                    mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
-                    mensaje += "⚠️ Datos insuficientes para análisis\n\n"
+                    mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes para análisis\n\n"
                     print(f"DBG:{moneda} insuficiente n={0 if historicos is None else len(historicos)}")
-                    # Aún así guarda el precio sin RSI
                     insertar_precio(moneda, precio, None)
                     continue
-                # Indicadores
+
                 rsi = calcular_rsi(historicos)
-                macd, macd_signal, _ = calcular_macd(historicos)
                 señal = generar_señal_rsi(rsi, precio, historicos)
-                # Insertar en DB
                 insertar_precio(moneda, precio, rsi)
-                # Construir mensaje seguro
+
                 mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
-                indicadores = señal.get("indicadores") or {}
-                rsi_val = indicadores.get("rsi")
+                ind = señal.get("indicadores") or {}
+
+                rsi_val = ind.get("rsi")
                 if rsi_val is not None:
-                    # [L~510] — línea RSI del mensaje
-                    mensaje += f"📈 <b>RSI:</b> {rsi_val} "
-                    mensaje += f"(Compra&lt;{indicadores.get('rsi_umbral_compra','?')}, "
-                    mensaje += f"Venta&gt;{indicadores.get('rsi_umbral_venta','?')})\n"
+                    mensaje += f"📈 <b>RSI:</b> {rsi_val} (Compra&lt;{ind.get('rsi_umbral_compra','?')}, Venta&gt;{ind.get('rsi_umbral_venta','?')})\n"
                 else:
                     mensaje += "📈 <b>RSI:</b> No disponible\n"
 
-                macd_val = indicadores.get("macd")
-                macd_sig = indicadores.get("macd_signal")
+                macd_val = ind.get("macd"); macd_sig = ind.get("macd_signal")
                 if macd_val is not None and macd_sig is not None:
                     macd_trend = "↑" if macd_val > macd_sig else "↓"
                     mensaje += f"📊 <b>MACD:</b> {macd_val:.4f} (Señal: {macd_sig:.4f}) <b>{macd_trend}</b>\n"
@@ -526,35 +412,32 @@ def resumen():
                     mensaje += "📊 <b>MACD:</b> No disponible\n"
 
                 mensaje += f"🔄 <b>Tendencia:</b> {señal.get('tendencia','?')}\n"
-                conf = int(señal.get('confianza', 0))
+                conf = int(señal.get("confianza", 0))
                 mensaje += f"🎯 <b>Señal:</b> <u>{señal.get('señal','?')}</u>\n"
-                mensaje += f"🔍 <b>Confianza:</b> {'★' * conf}{'☆' * (5 - conf)} ({conf}/5)\n\n"
-                reco = recomendar_accion(señal.get('señal'), rsi_val, macd_val, macd_sig, conf)
+                mensaje += f"🔍 <b>Confianza:</b> {'★' * conf}{'☆' * (5 - conf)} ({conf}/5)\n"
+                reco = recomendar_accion(señal.get("señal"), rsi_val, macd_val, macd_sig, conf)
                 mensaje += f"🤖 <b>Recomendación:</b> {reco}\n\n"
+
                 print(f"DBG:{moneda} OK rsi={rsi_val} macd={macd_val} sig={macd_sig} conf={conf}")
 
-            except Exception as e:
-                # No duplicamos cabecera; mostramos un bloque de error por moneda
-                logging.error(f"Error procesando {moneda}: {str(e)}", exc_info=True)
+            except Exception:
+                logging.error(f"Error procesando {moneda}", exc_info=True)
                 print(f"DBG:EXC procesando {moneda}", traceback.format_exc())
-                mensaje += f"<b>{moneda}:</b> {precios.get(moneda, 'N/D')} €\n"
-                mensaje += "⚠️ Error en análisis - Ver logs\n\n"
-        # Pie del mensaje
+                mensaje += f"<b>{moneda}:</b> {precios.get(moneda, 'N/D')} €\n⚠️ Error en análisis - Ver logs\n\n"
+
         mensaje += "════════════════════════\n"
         mensaje += f"🔄 <i>Actualizado: {formatear_fecha(ahora)} (Hora Madrid)</i>\n"
-        mensaje += f"📶 <i>Indicadores: RSI(14), MACD(12,26,9)</i>"
-
-        # Enviar
+        mensaje += "📶 <i>Indicadores: RSI(14), MACD(12,26,9)</i>"
+        print(f"DBG:mensaje_len={len(mensaje)}")
         enviar_telegram(mensaje)
         return "Resumen enviado", 200
 
-    except Exception as e:
-        logging.critical(f"Error general en /resumen: {str(e)}", exc_info=True)
+    except Exception:
+        logging.critical("Error general en /resumen", exc_info=True)
         print("DBG:EXC resumen", traceback.format_exc())
         enviar_telegram("⚠️ <b>Error crítico:</b> Fallo al generar el resumen. Ver logs.")
         return "Error interno", 500
 
-# [L~568]
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
