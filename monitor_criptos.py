@@ -7,13 +7,15 @@ from flask import Flask
 from datetime import datetime, timedelta
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
-from dateutil.parser import isoparse  # (no usado, quítalo si quieres)
 import logging
 import traceback
 
 # --- Logging ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s",
-                    handlers=[logging.StreamHandler()])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
 # --- Flask ---
 app = Flask(__name__)
@@ -37,7 +39,7 @@ def _env_float(key, default):
     except Exception:
         return float(default)
 
-MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)           # umbral base (0.5σ)
+MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)            # umbral base (0.5σ)
 MACD_SIGMA_K_TEND = _env_float("MACD_SIGMA_K_TEND", 0.35) # si coincide con tendencia
 PENDIENTE_UMBRAL_REL = _env_float("PENDIENTE_UMBRAL_REL", 0.0005)  # 0.05%
 
@@ -53,28 +55,32 @@ def formatear_fecha(fecha):
 
 # --- Indicadores ---
 def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
-    """RSI de Wilder."""
+    """RSI de Wilder con manejo de edge cases."""
     if cierres is None:
         return None
     try:
         c = np.asarray(cierres, dtype=np.float64)
         if len(c) < periodo + 1:
             return None
+
         deltas = np.diff(c)
         ganancias = np.clip(deltas, 0, None)
         perdidas = np.clip(-deltas, 0, None)
+
         avg_gain = np.mean(ganancias[:periodo])
         avg_loss = np.mean(perdidas[:periodo])
+
         for i in range(periodo, len(deltas)):
             avg_gain = (avg_gain * (periodo - 1) + ganancias[i]) / periodo
             avg_loss = (avg_loss * (periodo - 1) + perdidas[i]) / periodo
+
         if avg_loss == 0:
             rsi = 100.0 if avg_gain > 0 else 50.0
         else:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
-        rsi = float(np.clip(rsi, 0, 100))
-        rsi = round(rsi, 2)
+
+        rsi = round(float(np.clip(rsi, 0, 100)), 2)
         print(f"DBG:rsi(wilder) valor={rsi}")
         return rsi
     except Exception:
@@ -82,10 +88,11 @@ def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
         return None
 
 def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
-    """MACD clásico con EMAs."""
+    """Calcula MACD clásico con EMAs."""
     try:
         if len(cierres) < periodo_largo + periodo_senal:
             return None, None, None
+
         c = np.array(cierres, dtype=np.float64)
 
         def ema(data, period):
@@ -108,6 +115,7 @@ def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
 
         signal_line = ema(np.array(macd_values), periodo_senal) if len(macd_values) >= periodo_senal else macd_line
         hist = macd_line - signal_line
+
         print(f"DBG:macd macd={macd_line:.6f} signal={signal_line:.6f} hist={hist:.6f}")
         return macd_line, signal_line, hist
     except Exception:
@@ -133,11 +141,13 @@ def calcular_confianza(historico, rsi, macd, macd_signal):
         if rsi is None or macd is None or macd_signal is None or h is None or len(h) < 27:
             print(f"DBG:confianza datos_insuf rsi={rsi} macd={macd} sig={macd_signal}")
             return 1
+
         delta = macd - macd_signal
         difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
         vol = np.std(difs)
         relevante = abs(delta) > MACD_SIGMA_K * max(1e-12, vol)
         tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
+
         conf = 2
         if rsi < 30 or rsi > 70:
             conf += 1
@@ -147,6 +157,7 @@ def calcular_confianza(historico, rsi, macd, macd_signal):
             conf += 1
         if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0):
             conf = max(1, conf - 1)
+
         conf = int(max(1, min(5, conf)))
         print(f"DBG:confianza rsi={rsi} delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend} -> {conf}")
         return conf
@@ -154,7 +165,7 @@ def calcular_confianza(historico, rsi, macd, macd_signal):
         return 1
 
 def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
-    """Señal combinada RSI + MACD (relativo a σ) + tendencia."""
+    """Señal combinada RSI + MACD (relativo a σ) + tendencia (+ persistencia y desempate)."""
     try:
         if rsi is None or historico is None or len(historico) < 35:
             return {"señal": "DATOS_INSUFICIENTES", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
@@ -163,11 +174,13 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         macd, macd_signal, _ = calcular_macd(h)
         tendencia = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
 
+        # Umbrales dinámicos RSI (cap ±5)
         volatilidad = np.std(h[-10:]) / max(1e-12, np.mean(h[-10:]))
         ajuste = min(volatilidad * 20, 5)
         rsi_sobrecompra = 70 - ajuste / 2
         rsi_sobreventa = 30 + ajuste / 2
 
+        # Señal base por RSI
         if rsi < rsi_sobreventa:
             senal_rsi = "COMPRA"
         elif rsi > rsi_sobrecompra:
@@ -175,24 +188,48 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         else:
             senal_rsi = "NEUTRO"
 
-        # Refuerzo por MACD con umbral relativo a σ
+        # --- Refuerzo por MACD con umbral relativo a σ ---
         senal = senal_rsi
         if macd is not None and macd_signal is not None:
             delta = macd - macd_signal
+
+            # σ de las últimas diferencias de precio
             difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
             vol = np.std(difs)
+
+            # Umbral base
             relevante = abs(delta) > MACD_SIGMA_K * max(1e-12, vol)
+
+            # [PATCH-3] Persistencia del cruce (2 ticks seguidos)
+            macd_prev, sig_prev, _ = calcular_macd(h[:-1]) if len(h) > 35 else (None, None, None)
+            if macd_prev is not None and sig_prev is not None:
+                delta_prev = macd_prev - sig_prev
+                mismo_signo = (delta > 0 and delta_prev > 0) or (delta < 0 and delta_prev < 0)
+                if mismo_signo and abs(delta) > 0.25 * max(1e-12, vol):
+                    relevante = True
+
+            # Ajuste por tendencia
             tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
             if tend == "ALZA" and delta > 0:
                 relevante = abs(delta) > MACD_SIGMA_K_TEND * max(1e-12, vol)
             if tend == "BAJA" and delta < 0:
                 relevante = abs(delta) > MACD_SIGMA_K_TEND * max(1e-12, vol)
+
+            # Inclinar la balanza si es relevante
             if relevante:
                 if delta > 0 and rsi > 35:
                     senal = "COMPRA" if senal_rsi != "VENTA" else senal_rsi
                 elif delta < 0 and rsi < 65:
                     senal = "VENTA" if senal_rsi != "COMPRA" else senal_rsi
+
             print(f"DBG:macd_ref delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend}")
+
+        # Desempate si todo apunta al mismo lado (tendencia + RSI + MACD lado)
+        if senal == "NEUTRO" and macd is not None and macd_signal is not None:
+            if tendencia == "BAJA" and rsi < 45 and macd < macd_signal:
+                senal = "VENTA"
+            elif tendencia == "ALZA" and rsi > 55 and macd > macd_signal:
+                senal = "COMPRA"
 
         confianza = calcular_confianza(h, rsi, macd, macd_signal)
         indicadores = {
@@ -385,6 +422,7 @@ def resumen():
             try:
                 precio = precios[moneda]
                 historicos = obtener_precios_historicos(moneda)
+
                 if historicos is None or len(historicos) < 10:
                     mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes para análisis\n\n"
                     print(f"DBG:{moneda} insuficiente n={0 if historicos is None else len(historicos)}")
