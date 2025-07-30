@@ -63,44 +63,35 @@ def parsear_fecha_supabase(fecha_str):
 # --- Indicadores ------------------------------------------------------------
 # [L~64]
 def calcular_confianza(historico, rsi, macd, macd_signal):
-    """
-    1–5 estrellas en base a:
-      - RSI extremo
-      - Confirmación MACD
-      - Magnitud del cruce (delta_rel)
-      - Alineación con tendencia por pendiente
-    """
     try:
         h = np.asarray(historico, dtype=np.float64) if historico is not None else None
-        if rsi is None or macd is None or macd_signal is None or h is None or len(h) < 26:
+        if rsi is None or macd is None or macd_signal is None or h is None or len(h) < 27:
             print(f"DBG:confianza datos_insuf rsi={rsi} macd={macd} sig={macd_signal}")
             return 1
 
         delta = macd - macd_signal
-        base = np.mean(h[-26:])
-        delta_rel = abs(delta) / max(1e-12, base)  # tamaño del cruce relativo
-        tendencia = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
-
+        difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
+        vol = np.std(difs)
+        relevante = abs(delta) > 0.5 * max(1e-12, vol)
+        tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
         conf = 2  # base
-        # +1 si RSI extremo
+        # RSI extremo
         if rsi < 30 or rsi > 70:
             conf += 1
-        # +1 si MACD confirma el lado del RSI
+        # MACD confirma lado del RSI
         if (rsi < 50 and delta > 0) or (rsi > 50 and delta < 0):
             conf += 1
-        # +1 si el cruce es relevante
-        if delta_rel > 0.001:
+        # Cruce relevante
+        if relevante:
             conf += 1
-        # Ajuste por tendencia opuesta
-        if (tendencia == "ALZA" and delta < 0) or (tendencia == "BAJA" and delta > 0):
+        # Penaliza si tendencia contradice el cruce
+        if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0):
             conf = max(1, conf - 1)
-
         conf = int(max(1, min(5, conf)))
-        print(f"DBG:confianza rsi={rsi} delta_rel={delta_rel:.6f} tend={tendencia} -> {conf}")
+        print(f"DBG:confianza rsi={rsi} delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend} -> {conf}")
         return conf
     except Exception:
         return 1
-
 # [L~104]
 def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
     """RSI de Wilder con manejo de edge cases."""
@@ -217,41 +208,49 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
             senal_rsi = "NEUTRO"
 
         # --- Refuerzo por MACD con filtro de magnitud ---
+                # --- Refuerzo por MACD con filtro de magnitud relativo a la volatilidad ---
         senal = senal_rsi
         macd_ok = (macd is not None and macd_signal is not None)
         if macd_ok:
             delta = macd - macd_signal
-            # Magnitud relativa del cruce vs precio medio de 26 (evita ruido)
-            base = np.mean(h[-26:]) if len(h) >= 26 else np.mean(h)
-            delta_rel = abs(delta) / max(1e-12, base)
 
-            # Umbral de relevancia (0.1% del precio)
-            relevante = delta_rel > 0.001
+            # Volatilidad de las últimas 26 diferencias de precio (escala comparable)
+            if len(h) >= 27:
+                difs = np.diff(h[-27:])
+            else:
+                difs = np.diff(h)
+            vol = np.std(difs)  # σ en unidades de precio
 
+            # Umbral adaptativo: 0.5σ
+            relevante = abs(delta) > 0.5 * max(1e-12, vol)
+
+            # Empate a favor de la tendencia: si coincide, baja umbral a 0.35σ
+            tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=0.0005)
+            if tend == "ALZA" and delta > 0:
+                relevante = abs(delta) > 0.35 * max(1e-12, vol)
+            if tend == "BAJA" and delta < 0:
+                relevante = abs(delta) > 0.35 * max(1e-12, vol)
+
+            # Si es relevante, deja que MACD incline la balanza
             if relevante:
-                if delta > 0 and rsi > 35:     # fuerza alcista
+                if delta > 0 and rsi > 35:
                     senal = "COMPRA" if senal_rsi != "VENTA" else senal_rsi
-                elif delta < 0 and rsi < 65:   # fuerza bajista
-                    senal = "VENTA"  if senal_rsi != "COMPRA" else senal_rsi
-
+                elif delta < 0 and rsi < 65:
+                    senal = "VENTA" if senal_rsi != "COMPRA" else senal_rsi
+            print(f"DBG:macd_ref delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend}")
         confianza = calcular_confianza(h, rsi, macd, macd_signal)
-
         indicadores = {
             "rsi": round(rsi, 2),
             "macd": round(macd, 6) if macd is not None else None,
             "macd_signal": round(macd_signal, 6) if macd_signal is not None else None,
             "rsi_umbral_compra": round(rsi_sobreventa, 2),
-            "rsi_umbral_venta": round(rsi_sobrecompra, 2)
-        }
-
+            "rsi_umbral_venta": round(rsi_sobrecompra, 2)}
         print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza}")
         return {"señal": senal, "confianza": confianza, "tendencia": tendencia, "indicadores": indicadores}
-
     except Exception as e:
         logging.error(f"Error en generar_señal_rsi: {str(e)}", exc_info=True)
         print("DBG:EXC generar_señal_rsi", traceback.format_exc())
         return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
-
 # [L~255]
 def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_signal: float | None, confianza: int) -> str:
     """
@@ -513,8 +512,8 @@ def resumen():
                 if rsi_val is not None:
                     # [L~510] — línea RSI del mensaje
                     mensaje += f"📈 <b>RSI:</b> {rsi_val} "
-                    mensaje += f"<code>(Compra<{indicadores.get('rsi_umbral_compra','?')}, "
-                    mensaje += f"Venta>{indicadores.get('rsi_umbral_venta','?')})</code>\n"
+                    mensaje += f"(Compra&lt;{indicadores.get('rsi_umbral_compra','?')}, "
+                    mensaje += f"Venta&gt;{indicadores.get('rsi_umbral_venta','?')})\n"
                 else:
                     mensaje += "📈 <b>RSI:</b> No disponible\n"
 
