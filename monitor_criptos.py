@@ -239,6 +239,16 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
             "rsi_umbral_compra": round(rsi_sobreventa, 2),
             "rsi_umbral_venta": round(rsi_sobrecompra, 2),
         }
+        indicadores = {
+        "rsi": round(rsi, 2),
+        "macd": round(macd, 6) if macd is not None else None,
+        "macd_signal": round(macd_signal, 6) if macd_signal is not None else None,
+        "macd_raw": float(macd) if macd is not None else None,                # <-- NUEVO
+        "macd_signal_raw": float(macd_signal) if macd_signal is not None else None,  # <-- NUEVO
+        "rsi_umbral_compra": round(rsi_sobreventa, 2),
+        "rsi_umbral_venta": round(rsi_sobrecompra, 2),
+        }
+
         print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza}")
         return {"señal": senal, "confianza": confianza, "tendencia": tendencia, "indicadores": indicadores}
     except Exception:
@@ -444,11 +454,21 @@ def resumen():
 
                 macd_val = ind.get("macd"); macd_sig = ind.get("macd_signal")
                 if macd_val is not None and macd_sig is not None:
-                    macd_trend = "↑" if macd_val > macd_sig else "↓"
-                    mensaje += f"📊 <b>MACD:</b> {macd_val:.4f} (Señal: {macd_sig:.4f}) <b>{macd_trend}</b>\n"
+                    macd_trend = "↑" if (macd_raw if macd_raw is not None else macd_val) > (macd_sig_raw if macd_sig_raw is not None else macd_sig) else "↓"
+                    casi = " ≈" if abs((macd_raw or macd_val) - (macd_sig_raw or macd_sig)) < 1e-8 else ""
+                    mensaje += f"📊 <b>MACD:</b> {macd_val:.4f} (Señal: {macd_sig:.4f}) <b>{macd_trend}</b>{casi}\n"
                 else:
                     mensaje += "📊 <b>MACD:</b> No disponible\n"
-
+                macd_raw = ind.get("macd_raw")
+                macd_sig_raw = ind.get("macd_signal_raw")
+              # Usa RAW para la lógica; si no hay, cae a los redondeados
+                reco = recomendar_accion(
+                    señal.get('señal'),
+                    rsi_val,
+                    macd_raw if macd_raw is not None else macd_val,
+                    macd_sig_raw if macd_sig_raw is not None else macd_sig,
+                    conf
+                    )
                 mensaje += f"🔄 <b>Tendencia:</b> {señal.get('tendencia','?')}\n"
                 conf = int(señal.get("confianza", 0))
                 mensaje += f"🎯 <b>Señal:</b> <u>{señal.get('señal','?')}</u>\n"
