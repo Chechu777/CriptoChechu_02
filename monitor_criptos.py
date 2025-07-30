@@ -28,18 +28,26 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CMC_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
+def _env_float(key, default):
+    try:
+        return float(os.getenv(key, default))
+    except Exception:
+        return float(default)
+
+def _env_bool(key, default=False):
+    v = str(os.getenv(key, str(default))).strip().lower()
+    return v in ("1", "true", "t", "yes", "y", "si", "sí")
+
 # --- Constantes ---
 MONEDAS = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
 INTERVALO_RSI = 14
 HORAS_HISTORICO = 48
 
-def _env_float(key, default):
-    try: return float(os.getenv(key, default))
-    except Exception: return float(default)
-
-MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)            # 0.5σ
+# Sensibilidades MACD (se pueden ajustar por entorno)
+MACD_SIGMA_K = _env_float("MACD_SIGMA_K", 0.5)            # 0.5σ por defecto
 MACD_SIGMA_K_TEND = _env_float("MACD_SIGMA_K_TEND", 0.35) # 0.35σ si coincide con tendencia
 PENDIENTE_UMBRAL_REL = _env_float("PENDIENTE_UMBRAL_REL", 0.0005)  # 0.05%
+PERMITIR_COMPRA_CASI_CRUCE = _env_bool("PERMITIR_COMPRA_CASI_CRUCE", False)
 
 # --- Supabase ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -54,10 +62,12 @@ def formatear_fecha(fecha):
 # --- Indicadores ---
 def calcular_rsi(cierres, periodo: int = INTERVALO_RSI) -> float:
     """RSI de Wilder con manejo de edge cases."""
-    if cierres is None: return None
+    if cierres is None:
+        return None
     try:
         c = np.asarray(cierres, dtype=np.float64)
-        if len(c) < periodo + 1: return None
+        if len(c) < periodo + 1:
+            return None
 
         deltas = np.diff(c)
         ganancias = np.clip(deltas, 0, None)
@@ -91,9 +101,11 @@ def calcular_macd(cierres, periodo_largo=26, periodo_corto=12, periodo_senal=9):
         c = np.array(cierres, dtype=np.float64)
 
         def ema(data, period):
-            if len(data) < period: return np.mean(data)
+            if len(data) < period:
+                return np.mean(data)
             alpha = 2 / (period + 1)
-            e = np.zeros_like(data); e[0] = data[0]
+            e = np.zeros_like(data)
+            e[0] = data[0]
             for i in range(1, len(data)):
                 e[i] = alpha*data[i] + (1-alpha)*e[i-1]
             return e[-1]
@@ -121,8 +133,10 @@ def _tendencia_por_pendiente(historico, puntos=12, umbral_rel=PENDIENTE_UMBRAL_R
     x = np.arange(len(h), dtype=np.float64)
     m, _ = np.polyfit(x, h, 1)
     rel = m / max(1e-12, np.mean(h))
-    if rel > umbral_rel:  return "ALZA"
-    if rel < -umbral_rel: return "BAJA"
+    if rel > umbral_rel:
+        return "ALZA"
+    if rel < -umbral_rel:
+        return "BAJA"
     return "PLANA"
 
 def calcular_confianza(historico, rsi, macd, macd_signal):
@@ -140,10 +154,14 @@ def calcular_confianza(historico, rsi, macd, macd_signal):
         tend = _tendencia_por_pendiente(h, puntos=12, umbral_rel=PENDIENTE_UMBRAL_REL)
 
         conf = 2
-        if rsi < 30 or rsi > 70: conf += 1
-        if (rsi < 50 and delta > 0) or (rsi > 50 and delta < 0): conf += 1
-        if relevante: conf += 1
-        if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0): conf = max(1, conf - 1)
+        if rsi < 30 or rsi > 70:
+            conf += 1
+        if (rsi < 50 and delta > 0) or (rsi > 50 and delta < 0):
+            conf += 1
+        if relevante:
+            conf += 1
+        if (tend == "ALZA" and delta < 0) or (tend == "BAJA" and delta > 0):
+            conf = max(1, conf - 1)
 
         conf = int(max(1, min(5, conf)))
         print(f"DBG:confianza rsi={rsi} delta={delta:.6g} vol={vol:.6g} relevante={relevante} tend={tend} -> {conf}")
@@ -168,12 +186,17 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         rsi_sobreventa  = 30 + ajuste/2
 
         # Señal base por RSI
-        if rsi < rsi_sobreventa:   senal_rsi = "COMPRA"
-        elif rsi > rsi_sobrecompra: senal_rsi = "VENTA"
-        else:                       senal_rsi = "NEUTRO"
+        if rsi < rsi_sobreventa:
+            senal_rsi = "COMPRA"
+        elif rsi > rsi_sobrecompra:
+            senal_rsi = "VENTA"
+        else:
+            senal_rsi = "NEUTRO"
 
         # Refuerzo por MACD con umbral relativo a σ y persistencia
         senal = senal_rsi
+        delta = None
+        vol = None
         if macd is not None and macd_signal is not None:
             delta = macd - macd_signal
             difs = np.diff(h[-27:]) if len(h) >= 27 else np.diff(h)
@@ -205,8 +228,10 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
 
         # Desempate suave
         if senal == "NEUTRO" and macd is not None and macd_signal is not None:
-            if tendencia == "BAJA" and rsi < 45 and macd < macd_signal:  senal = "VENTA"
-            elif tendencia == "ALZA" and rsi > 55 and macd > macd_signal: senal = "COMPRA"
+            if tendencia == "BAJA" and rsi < 45 and macd < macd_signal:
+                senal = "VENTA"
+            elif tendencia == "ALZA" and rsi > 55 and macd > macd_signal:
+                senal = "COMPRA"
 
         confianza = calcular_confianza(h, rsi, macd, macd_signal)
 
@@ -218,7 +243,7 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
            "macd_signal_raw": float(macd_signal) if macd_signal is not None else None,
            "rsi_umbral_compra": round(rsi_sobreventa, 2),
            "rsi_umbral_venta": round(rsi_sobrecompra, 2),
-           # NUEVO -> para “≈”
+           # Para “≈”
            "macd_delta": float(delta) if (macd is not None and macd_signal is not None) else None,
            "macd_vol": float(vol) if (macd is not None and macd_signal is not None) else None,
         }
@@ -230,17 +255,38 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         print("DBG:EXC generar_señal_rsi", traceback.format_exc())
         return {"señal": "ERROR", "confianza": 0, "tendencia": "DESCONOCIDA", "indicadores": {}}
 
-def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_signal: float | None, confianza: int) -> str:
-    """Recomendación condicionada a confirmación MACD."""
+# --- Opción A: recomendar_accion con “casi cruce” controlado por env var ---
+def recomendar_accion(
+    senal: str,
+    rsi: float | None,
+    macd: float | None,
+    macd_signal: float | None,
+    confianza: int,
+    macd_delta: float | None = None,
+    macd_vol: float | None = None,
+    tendencia: str | None = None
+) -> str:
+    """Recomendación condicionada a confirmación MACD, con opción de 'casi cruce' para compra parcial."""
     try:
-        def confirma_compra(): return macd is not None and macd_signal is not None and macd > macd_signal
-        def confirma_venta():  return macd is not None and macd_signal is not None and macd < macd_signal
+        def confirma_compra():
+            return macd is not None and macd_signal is not None and macd > macd_signal
+        def confirma_venta():
+            return macd is not None and macd_signal is not None and macd < macd_signal
+
+        # Umbral “casi cruce”: 10% del umbral base que ya se usa en el análisis
+        eps = None
+        if macd_delta is not None and macd_vol is not None:
+            eps = 0.1 * MACD_SIGMA_K * max(1e-12, macd_vol)
 
         if senal == "COMPRA":
             if confirma_compra():
                 txt = "🟢 Podrías comprar" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
             else:
-                txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
+                casi = (eps is not None and abs(macd_delta) < eps and (tendencia != "BAJA"))
+                if PERMITIR_COMPRA_CASI_CRUCE and casi:
+                    txt = "🟡 Podrías comprar en pequeña cantidad (casi cruza)"
+                else:
+                    txt = "⚪ Quieto chato, no hagas huevadas (espera confirmación MACD)"
         elif senal == "VENTA":
             if confirma_venta():
                 txt = "🔴 Podrías vender" + (" (señal fuerte)" if confianza >= 4 else " (señal débil)" if confianza <= 2 else "")
@@ -250,7 +296,8 @@ def recomendar_accion(senal: str, rsi: float | None, macd: float | None, macd_si
             txt = "⚪ Quieto chato, no hagas huevadas"
         else:
             txt = "ℹ️ Sin datos suficientes para recomendar"
-        print(f"DBG:reco senal={senal} macd={macd} sig={macd_signal} conf={confianza} -> {txt}")
+
+        print(f"DBG:reco senal={senal} macd={macd} sig={macd_signal} delta={macd_delta} eps={eps} tend={tendencia} conf={confianza} -> {txt}")
         return txt
     except Exception:
         return "ℹ️ Sin datos suficientes para recomendar"
@@ -269,7 +316,8 @@ def obtener_precios_actuales():
         for m in MONEDAS:
             try:
                 precio = float(datos["data"][m]["quote"]["EUR"]["price"])
-                if precio <= 0: raise ValueError("Precio no positivo")
+                if precio <= 0:
+                    raise ValueError("Precio no positivo")
                 precios[m] = precio
             except (KeyError, ValueError) as e:
                 logging.error(f"Error procesando {m}: {e}")
@@ -291,12 +339,14 @@ def obtener_precios_historicos(nombre: str):
                 .limit(max(60, INTERVALO_RSI * 5)).execute())
         data = resp.data
         logging.info(f"Datos crudos de Supabase para {nombre}: {data}")
-        if not data: return None
+        if not data:
+            return None
         precios = []
         for reg in data:
             try:
                 p = float(reg["precio"])
-                if p > 0: precios.append(p)
+                if p > 0:
+                    precios.append(p)
             except (ValueError, TypeError):
                 continue
         arr = np.array(precios) if precios else None
@@ -365,7 +415,8 @@ def _a_texto_plano(m: str) -> str:
     repl = (("<b>", ""), ("</b>", ""), ("<i>", ""), ("</i>", ""), ("<u>", ""), ("</u>", ""),
             ("<code>", "`"), ("</code>", "`"), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&"))
     out = m
-    for a, b in repl: out = out.replace(a, b)
+    for a, b in repl:
+        out = out.replace(a, b)
     return out
 
 # --- Endpoints ---
@@ -408,7 +459,7 @@ def resumen():
                 señal = generar_señal_rsi(rsi, precio, historicos)
                 insertar_precio(moneda, precio, rsi)
 
-                # --- Variables de indicadores (raw primero para la lógica) ---
+                # --- Variables de indicadores ---
                 ind = señal.get("indicadores") or {}
                 rsi_val      = ind.get("rsi")
                 macd_val     = ind.get("macd")
@@ -417,6 +468,8 @@ def resumen():
                 macd_sig_raw = ind.get("macd_signal_raw", macd_sig)
                 conf         = int(señal.get("confianza", 0))
                 tend_txt     = señal.get("tendencia", "?")
+                delta        = ind.get("macd_delta")
+                vol          = ind.get("macd_vol")
 
                 # --- Mensaje ---
                 mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n"
@@ -431,12 +484,9 @@ def resumen():
                     comp_sig   = macd_sig_raw if macd_sig_raw is not None else macd_sig
                     macd_trend = "↑" if comp_macd > comp_sig else "↓"
 
-                    # NUEVO “≈” relativo a la volatilidad
-                    delta = ind.get("macd_delta")
-                    vol   = ind.get("macd_vol")
+                    # “≈” relativo a la volatilidad
                     eps = None
                     if delta is not None and vol is not None:
-                        # umbral relativo: 10% del umbral de relevancia base
                         eps = 0.1 * MACD_SIGMA_K * max(1e-12, vol)
                     casi = " ≈" if (eps is not None and abs(delta) < eps) else ""
                     mensaje += f"📊 <b>MACD:</b> {macd_val:.4f} (Señal: {macd_sig:.4f}) <b>{macd_trend}</b>{casi}\n"
@@ -447,13 +497,16 @@ def resumen():
                 mensaje += f"🎯 <b>Señal:</b> <u>{señal.get('señal','?')}</u>\n"
                 mensaje += f"🔍 <b>Confianza:</b> {'★'*conf}{'☆'*(5-conf)} ({conf}/5)\n"
 
-                # Recomendación (usar RAW para lógica, fallback a redondeado)
+                # Recomendación (ahora con “casi cruce”, opción A)
                 reco = recomendar_accion(
                     señal.get("señal"),
                     rsi_val,
                     macd_raw if macd_raw is not None else macd_val,
                     macd_sig_raw if macd_sig_raw is not None else macd_sig,
-                    conf
+                    conf,
+                    macd_delta=delta,
+                    macd_vol=vol,
+                    tendencia=tend_txt
                 )
                 mensaje += f"🤖 <b>Recomendación:</b> {reco}\n\n"
 
