@@ -31,11 +31,11 @@ services:
       - key: PERMITIR_COMPRA_DIP
         value: "true"
       - key: DIP_PCT
-        value: "2.5"       # caída mínima % vs. máximo en ventana
+        value: "1.8"       # caída mínima % vs. máximo en ventana
       - key: DIP_LOOKBACK_PUNTOS
         value: "24"        # puntos usados para buscar ese máximo (≈ muestras)
       - key: ZSCORE_DIP
-        value: "-1.2"      # sobre-extensión bajista para dip
+        value: "-0.60"      # sobre-extensión bajista para dip
       - key: COMPRA_PARCIAL_PCT
         value: "0.25"      # 25% del tamaño “normal” para compras parciales
       - key: ZSCORE_TAKEPROFIT
