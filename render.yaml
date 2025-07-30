@@ -1,23 +1,42 @@
-# --- No-secrets / defaults versionados aquí ---
-- key: MACD_SIGMA_K
-  value: "0.25"      # antes 0.30 → más sensible
-- key: MACD_SIGMA_K_TEND
-  value: "0.15"      # antes 0.20 → más sensible con tendencia
-- key: PENDIENTE_UMBRAL_REL
-  value: "0.0004"    # igual
+services:
+  - type: web
+    name: monitor-criptos
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn wsgi:application"
+    envVars:
+      # --- Secrets: define los valores SOLO en el panel de Render ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: COINMARKETCAP_API_KEY
+        sync: false
 
-# Habilitadores y parámetros de compra parcial
-- key: PERMITIR_COMPRA_CASI_CRUCE
-  value: "true"
-- key: PERMITIR_COMPRA_DIP
-  value: "true"
-- key: DIP_PCT
-  value: "2.5"       # antes 4.0 → detecta dips más chicos
-- key: DIP_LOOKBACK_PUNTOS
-  value: "24"
-- key: ZSCORE_DIP
-  value: "-1.2"      # antes -1.5 → activa dip antes
-- key: COMPRA_PARCIAL_PCT
-  value: "0.25"
-- key: ZSCORE_TAKEPROFIT
-  value: "1.2"       # antes 1.5 → TP parcial más temprano
+      # --- No-secrets / defaults versionados aquí (modo agresivo) ---
+      - key: MACD_SIGMA_K
+        value: "0.25"      # sensibilidad MACD base (antes 0.30)
+      - key: MACD_SIGMA_K_TEND
+        value: "0.15"      # umbral si coincide con tendencia (antes 0.20)
+      - key: PENDIENTE_UMBRAL_REL
+        value: "0.0004"    # umbral de pendiente para tendencia
+
+      # Habilitadores y parámetros de compra/venta parcial
+      - key: PERMITIR_COMPRA_CASI_CRUCE
+        value: "true"
+      - key: PERMITIR_COMPRA_DIP
+        value: "true"
+      - key: DIP_PCT
+        value: "2.5"       # caída mínima % vs. máximo en ventana
+      - key: DIP_LOOKBACK_PUNTOS
+        value: "24"        # puntos usados para buscar ese máximo (≈ muestras)
+      - key: ZSCORE_DIP
+        value: "-1.2"      # sobre-extensión bajista para dip
+      - key: COMPRA_PARCIAL_PCT
+        value: "0.25"      # 25% del tamaño “normal” para compras parciales
+      - key: ZSCORE_TAKEPROFIT
+        value: "1.2"       # tp parcial más temprano por sobre-extensión
