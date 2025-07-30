@@ -375,6 +375,89 @@ def obtener_precios_actuales():
         logging.error("Error API CoinMarketCap", exc_info=True)
         return None
 
+def _cmc_headers():
+    return {"Accepts": "application/json", "X-CMC_PRO_API_KEY": CMC_API_KEY}
+
+def obtener_ohlcv_diario(symbol: str, convert="EUR", count=60, time_end=None):
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
+    params = {
+        "symbol": symbol, "convert": convert,
+        "interval": "daily", "count": count
+    }
+    if time_end: params["time_end"] = time_end  # ISO8601 o fecha
+    r = requests.get(url, headers=_cmc_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()["data"]["quotes"]
+    # Devolvemos cierres (para RSI/MACD) y ohlcv por si los quieres almacenar
+    closes = [float(q["quote"][convert]["close"]) for q in data]
+    ohlcv = [{
+        "open": float(q["quote"][convert]["open"]),
+        "high": float(q["quote"][convert]["high"]),
+        "low": float(q["quote"][convert]["low"]),
+        "close": float(q["quote"][convert]["close"]),
+        "volume": float(q["quote"][convert]["volume"]),
+        "time_open": q["time_open"], "time_close": q["time_close"]
+    } for q in data]
+    return np.array(closes, dtype=np.float64), ohlcv
+
+def obtener_intradia_cierres(symbol: str, convert="EUR", interval="1h", count=60, time_end=None):
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/historical"
+    params = {
+        "symbol": symbol, "convert": convert,
+        "interval": interval, "count": count
+    }
+    if time_end: params["time_end"] = time_end
+    r = requests.get(url, headers=_cmc_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()["data"]["quotes"]
+    closes = [float(q["quote"][convert]["price"]) for q in data]
+    ts = [q["timestamp"] for q in data]
+    return np.array(closes, dtype=np.float64), ts
+
+def _cmc_headers():
+    return {"Accepts": "application/json", "X-CMC_PRO_API_KEY": CMC_API_KEY}
+
+def obtener_ohlcv_diario(symbol: str, convert="EUR", count=120, time_end=None):
+    """CMC OHLCV diario (velas cerradas). Devuelve (cierres_np, lista_ohlcv)."""
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
+    params = {"symbol": symbol, "convert": convert, "interval": "daily", "count": int(count)}
+    if time_end: params["time_end"] = time_end
+    r = requests.get(url, headers=_cmc_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json().get("data", {}).get("quotes", [])
+    closes = [float(q["quote"][convert]["close"]) for q in data]
+    ohlcv = [{
+        "open":   float(q["quote"][convert]["open"]),
+        "high":   float(q["quote"][convert]["high"]),
+        "low":    float(q["quote"][convert]["low"]),
+        "close":  float(q["quote"][convert]["close"]),
+        "volume": float(q["quote"][convert].get("volume", 0.0)),
+        "time_open": q["time_open"],   # ISO8601 UTC
+        "time_close": q["time_close"], # ISO8601 UTC
+    } for q in data]
+    return np.array(closes, dtype=np.float64), ohlcv
+
+def guardar_ohlcv_batch(nombre: str, intervalo: str, ohlcv_rows: list, convert="EUR", fuente="CMC"):
+    """Upsert batch en tabla public.ohlcv (requiere índice único por (nombre,intervalo,time_open))."""
+    if not ohlcv_rows:
+        return
+    payload = []
+    for q in ohlcv_rows:
+        payload.append({
+            "nombre": nombre,
+            "intervalo": intervalo,                # ejemplo: "1d"
+            "time_open": q["time_open"],
+            "time_close": q["time_close"],
+            "open": q["open"],
+            "high": q["high"],
+            "low": q["low"],
+            "close": q["close"],
+            "volume": q.get("volume"),
+            "fuente": fuente,
+            "convert": convert,
+        })
+    supabase.table("ohlcv").upsert(payload, on_conflict=["nombre","intervalo","time_open"]).execute()
+
 def obtener_precios_historicos(nombre: str):
     """Histórico reciente desde Supabase."""
     try:
@@ -495,12 +578,38 @@ def resumen():
             try:
                 precio = precios[moneda]
                 historicos = obtener_precios_historicos(moneda)
+                # --- NUEVO: si está activado, sobreescribe histórico con CMC OHLCV diario
+                if os.getenv("USAR_CMC_DIARIO", "false").strip().lower() in ("1","true","t","yes","y","si","sí"):
+                    try:
+                        diarios_cnt = int(float(os.getenv("DIARIO_COUNT", "120")))
+                        cierres_cmc, ohlcv_rows = obtener_ohlcv_diario(moneda, convert="EUR", count=diarios_cnt)
+                        if cierres_cmc is not None and len(cierres_cmc) >= 10:
+                            historicos = cierres_cmc
+                        # Guardar/actualizar velas en Supabase (intervalo 1d)
+                        guardar_ohlcv_batch(moneda, "1d", ohlcv_rows, convert="EUR", fuente="CMC")
+                        print(f"DBG:ohlcv_guardadas {moneda} n={len(ohlcv_rows)}")
+                    except Exception:
+                        logging.error(f"Fallo OHLCV diario CMC para {moneda}", exc_info=True)
 
-                if historicos is None or len(historicos) < 10:
-                    mensaje += f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes para análisis\n\n"
-                    print(f"DBG:{moneda} insuficiente n={0 if historicos is None else len(historicos)}")
-                    insertar_precio(moneda, precio, None)
-                    continue
+                # NUEVO: opcionalmente sobreescribir con CMC intradía o diario
+                if os.getenv("USAR_CMC_INTRADIA", "false").lower() in ("1","true","t","yes","y","si","sí"):
+                    try:
+                        intr_int = os.getenv("INTRADIA_INTERVAL", "1h")
+                        intr_cnt = int(float(os.getenv("INTRADIA_COUNT", "60")))
+                        cierres_cmc, _ = obtener_intradia_cierres(moneda, convert="EUR", interval=intr_int, count=intr_cnt)
+                        if cierres_cmc is not None and len(cierres_cmc) >= 35:
+                            historicos = cierres_cmc
+                    except Exception:
+                        logging.error("Fallo intradía CMC, uso histórico local", exc_info=True)
+                
+                elif os.getenv("USAR_CMC_DIARIO", "false").lower() in ("1","true","t","yes","y","si","sí"):
+                    try:
+                        diarios_cnt = int(float(os.getenv("DIARIO_COUNT", "60")))
+                        cierres_cmc, _ = obtener_ohlcv_diario(moneda, convert="EUR", count=diarios_cnt)
+                        if cierres_cmc is not None and len(cierres_cmc) >= 35:
+                            historicos = cierres_cmc
+                    except Exception:
+                        logging.error("Fallo OHLCV diario CMC, uso histórico local", exc_info=True)
 
                 rsi = calcular_rsi(historicos)
                 señal = generar_señal_rsi(rsi, precio, historicos)
