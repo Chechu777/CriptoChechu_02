@@ -40,3 +40,8 @@ services:
         value: "0.25"      # 25% del tamaño “normal” para compras parciales
       - key: ZSCORE_TAKEPROFIT
         value: "1.2"       # tp parcial más temprano por sobre-extensión
+      - key: USAR_CMC_DIARIO
+        value: "true"
+      - key: DIARIO_COUNT
+        value: "120"     # cuántas velas diarias traer
+
