@@ -211,13 +211,16 @@ def generar_señal_rsi(rsi: float, precio_actual: float, historico) -> dict:
         confianza = calcular_confianza(h, rsi, macd, macd_signal)
 
         indicadores = {
-            "rsi": round(rsi, 2),
-            "macd": round(macd, 6) if macd is not None else None,
-            "macd_signal": round(macd_signal, 6) if macd_signal is not None else None,
-            "macd_raw": float(macd) if macd is not None else None,                 # para lógica
-            "macd_signal_raw": float(macd_signal) if macd_signal is not None else None,
-            "rsi_umbral_compra": round(rsi_sobreventa, 2),
-            "rsi_umbral_venta": round(rsi_sobrecompra, 2),
+           "rsi": round(rsi, 2),
+           "macd": round(macd, 6) if macd is not None else None,
+           "macd_signal": round(macd_signal, 6) if macd_signal is not None else None,
+           "macd_raw": float(macd) if macd is not None else None,
+           "macd_signal_raw": float(macd_signal) if macd_signal is not None else None,
+           "rsi_umbral_compra": round(rsi_sobreventa, 2),
+           "rsi_umbral_venta": round(rsi_sobrecompra, 2),
+           # NUEVO -> para “≈”
+           "macd_delta": float(delta) if (macd is not None and macd_signal is not None) else None,
+           "macd_vol": float(vol) if (macd is not None and macd_signal is not None) else None,
         }
 
         print(f"DBG:senal rsi={rsi} base={senal_rsi} -> final={senal} tend={tendencia} conf={confianza}")
@@ -427,9 +430,15 @@ def resumen():
                     comp_macd  = macd_raw if macd_raw is not None else macd_val
                     comp_sig   = macd_sig_raw if macd_sig_raw is not None else macd_sig
                     macd_trend = "↑" if comp_macd > comp_sig else "↓"
-                    casi = ""
-                    if comp_macd is not None and comp_sig is not None and abs(comp_macd - comp_sig) < 1e-8:
-                        casi = " ≈"
+
+                    # NUEVO “≈” relativo a la volatilidad
+                    delta = ind.get("macd_delta")
+                    vol   = ind.get("macd_vol")
+                    eps = None
+                    if delta is not None and vol is not None:
+                        # umbral relativo: 10% del umbral de relevancia base
+                        eps = 0.1 * MACD_SIGMA_K * max(1e-12, vol)
+                    casi = " ≈" if (eps is not None and abs(delta) < eps) else ""
                     mensaje += f"📊 <b>MACD:</b> {macd_val:.4f} (Señal: {macd_sig:.4f}) <b>{macd_trend}</b>{casi}\n"
                 else:
                     mensaje += "📊 <b>MACD:</b> No disponible\n"
