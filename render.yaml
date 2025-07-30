@@ -3,7 +3,7 @@ services:
     name: monitor-criptos
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn wsgi:app"
+    startCommand: "gunicorn wsgi:application"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -15,3 +15,23 @@ services:
         sync: false
       - key: COINMARKETCAP_API_KEY
         sync: false
+      - key: MACD_SIGMA_K
+        value: "0.30"
+      - key: MACD_SIGMA_K_TEND
+        value: "0.20"
+      - key: PENDIENTE_UMBRAL_REL
+        value: "0.0004"
+      - key: PERMITIR_COMPRA_CASI_CRUCE
+        value: "true"
+      - key: PERMITIR_COMPRA_DIP
+        value: "true"
+      - key: DIP_PCT
+        value: "4.0"
+      - key: DIP_LOOKBACK_PUNTOS
+        value: "24"
+      - key: ZSCORE_DIP
+        value: "-1.5"
+      - key: COMPRA_PARCIAL_PCT
+        value: "0.25"
+      - key: ZSCORE_TAKEPROFIT
+        value: "1.5"
