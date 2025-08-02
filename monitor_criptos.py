@@ -12,7 +12,6 @@ from flask import Flask
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
-from requests.exceptions import HTTPError
 import logging
 import traceback
 from functools import lru_cache
@@ -484,43 +483,41 @@ def _obtener_de_supabase_cache(symbol: str, convert: str, days: int) -> list:
     except Exception as e:
         logger.error(f"Error obteniendo caché de Supabase: {str(e)}")
         return []
- #================================
+ 
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
     """
-    Obtiene datos OHLCV diarios intentando primero CoinMarketCap y luego CoinGecko.
-    Usa caché local durante 30 minutos.
+    Obtiene datos OHLCV diarios solo desde CoinGecko, con caché local.
+    Añade 'fuente': 'CoinGecko' a cada fila.
     """
     if not hasattr(obtener_ohlcv_diario, 'cache'):
         obtener_ohlcv_diario.cache = {}
 
     CACHE_KEY = f"{symbol}_{convert}_{days}"
+
     if CACHE_KEY in obtener_ohlcv_diario.cache:
         cached_data, timestamp = obtener_ohlcv_diario.cache[CACHE_KEY]
         if (datetime.now(timezone.utc) - timestamp) < timedelta(minutes=30):
             logger.info(f"Usando datos en caché para {symbol}")
             return cached_data
 
-    estrategias = [_obtener_de_coinmarketcap_ohlcv, _obtener_de_coingecko_v3]
+    logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días) desde CoinGecko")
 
-    for estrategia in estrategias:
-        fuente = estrategia.__name__.replace("_obtener_de_", "").replace("_ohlcv", "").upper()
-        try:
-            logger.info(f"Intentando obtener datos desde {fuente} para {symbol} ({days} días)")
-            data = estrategia(symbol, convert, days)
-            if data:
-                for row in data:
-                    row["fuente"] = fuente
-                obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
-                logger.info(f"Obtenidos {len(data)} registros desde {fuente}")
-                return data
-            else:
-                logger.warning(f"{fuente} no devolvió datos para {symbol}")
-        except Exception as e:
-            logger.error(f"Fallo al obtener datos desde {fuente}: {str(e)}", exc_info=True)
+    try:
+        data = _obtener_de_coingecko_v3(symbol, convert, days)
+        if data:
+            for row in data:
+                row["fuente"] = "CoinGecko"
+            obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
+            logger.info(f"Obtenidos {len(data)} registros usando CoinGecko")
+            return data
+        else:
+            logger.warning(f"No se obtuvieron datos desde CoinGecko para {symbol}")
+    except Exception as e:
+        logger.error(f"Fallo al obtener datos de CoinGecko: {str(e)}", exc_info=True)
 
-    logger.error("Todas las estrategias fallaron (CoinMarketCap y CoinGecko)")
+    logger.error("Todas las estrategias fallaron (solo CoinGecko activado)")
     return []
-# ================
+   
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
         'BTC': 'bitcoin',
@@ -592,7 +589,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     except Exception as e:
         logger.error(f"Error en _obtener_de_coingecko_v3: {str(e)}", exc_info=True)
         raise
-#=================
+ 
 def _procesar_datos_coingecko(data: list, symbol: str, convert: str) -> list:
     """Procesa los datos de la API v3 de CoinGecko al formato de nuestra base de datos"""
     processed = []
@@ -1123,8 +1120,6 @@ def resumen():
                 intentos += 1
                 if not datos_obtenidos and intentos < max_intentos:
                     time.sleep(2 ** intentos)  # Backoff exponencial entre intentos
-                # Agrega esto aquí para evitar el rate limit de CoinGecko
-                time.sleep(3)
 
         # 2. Obtener precios actuales para el análisis (manteniendo la lógica original)
         precios = obtener_precios_actuales()
@@ -1295,8 +1290,4 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=port)
     else:
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
-
         sys.exit(1)  # Salir con código de error
-
-
-
