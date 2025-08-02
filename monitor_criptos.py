@@ -12,6 +12,7 @@ from flask import Flask
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 from zoneinfo import ZoneInfo
+from requests.exceptions import HTTPError
 import logging
 import traceback
 from functools import lru_cache
@@ -501,7 +502,7 @@ def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> l
             return cached_data
 
     logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días) desde CoinGecko")
-
+ 
     try:
         data = _obtener_de_coingecko_v3(symbol, convert, days)
         if data:
@@ -517,8 +518,21 @@ def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> l
 
     logger.error("Todas las estrategias fallaron (solo CoinGecko activado)")
     return []
-   
+# =================
+@backoff.on_exception(
+    backoff.expo,                  # backoff exponencial: 1s,2s,4s,8s…
+    HTTPError,                     # capturamos errores HTTP
+    max_time=60,                   # no esperará más de 60 s en total
+    giveup=lambda e:               # sólo retry en 429, otros 4xx/5xx dan error inmediato
+        not hasattr(e, 'response') or e.response.status_code != 429,
+    logger=logger                  # loguear retries
+)
+# ================
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
+    """
+    Versión actualizada para OHLCV con volumen de CoinGecko,
+    con retries automáticos si recibimos 429 Too Many Requests.
+    """
     ids_coingecko = {
         'BTC': 'bitcoin',
         'ETH': 'ethereum',
@@ -527,69 +541,58 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
         'SOL': 'solana'
     }
 
-    try:
-        coin_id = ids_coingecko.get(symbol.upper())
-        if not coin_id:
-            raise ValueError(f"Moneda {symbol} no soportada")
+    coin_id = ids_coingecko.get(symbol.upper())
+    if not coin_id:
+        raise ValueError(f"Moneda {symbol} no soportada")
 
-        # Asegurar que days esté dentro de rango
-        if days not in [1, 7, 14, 30, 90, 180, 365]:
-            days = max(1, min(days, 365))
+    # Asegurar que days esté dentro de rango
+    if days not in [1, 7, 14, 30, 90, 180, 365]:
+        days = max(1, min(days, 365))
 
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-        params = {
-            'vs_currency': convert.lower(),
-            'days': days,
-            'interval': 'daily'
-        }
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {
+        'vs_currency': convert.lower(),
+        'days': days,
+        'interval': 'daily'
+    }
 
-        headers = {
-            'Accept': 'application/json',
-            'User-Agent': 'Python Crypto Bot'
-        }
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Python Crypto Bot'
+    }
 
-        response = requests.get(url, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+    # Ésta petición se reintentará automáticamente si devuelve 429
+    response = requests.get(url, params=params, headers=headers, timeout=15)
+    response.raise_for_status()
+    data = response.json()
 
-        precios = data.get("prices", [])
-        volumenes = data.get("total_volumes", [])
+    precios = data.get("prices", [])
+    volumenes = data.get("total_volumes", [])
 
-        if not precios or not volumenes:
-            raise ValueError("No se recibieron datos de precios o volúmenes")
+    if not precios or not volumenes or len(precios) != len(volumenes):
+        raise ValueError("Datos de precios o volumen incompletos")
 
-        ohlcv_rows = []
+    ohlcv_rows = []
+    for (ts_precio, close), (_, volume) in zip(precios, volumenes):
+        dt_open = datetime.utcfromtimestamp(ts_precio / 1000).replace(tzinfo=timezone.utc)
+        dt_close = dt_open + timedelta(hours=23, minutes=59, seconds=59)
+        ohlcv_rows.append({
+            "nombre": symbol.upper(),
+            "convert": convert.upper(),
+            "intervalo": "1d",
+            "time_open": dt_open.isoformat(),
+            "time_close": dt_close.isoformat(),
+            "open": close,   # CoinGecko no da OHLC reales aquí
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": float(volume),
+            # fuente se pondrá después en obtener_ohlcv_diario()
+        })
 
-        for i in range(len(precios)):
-            ts_precio, close = precios[i]
-            _, volume = volumenes[i]
-
-            dt_open = datetime.utcfromtimestamp(ts_precio / 1000).replace(tzinfo=timezone.utc)
-            dt_close = dt_open + timedelta(hours=23, minutes=59, seconds=59)
-
-            row = {
-                "nombre": symbol.upper(),
-                "convert": convert.upper(),
-                "intervalo": "1d",
-                "time_open": dt_open.isoformat(),
-                "time_close": dt_close.isoformat(),
-                "open": close,
-                "high": close,
-                "low": close,
-                "close": close,
-                "volume": float(volume),
-                "fuente": "CoinGecko"
-            }
-
-            ohlcv_rows.append(row)
-
-        logger.info(f"Procesados {len(ohlcv_rows)} registros válidos de {len(precios)} para {symbol}")
-        return ohlcv_rows
-
-    except Exception as e:
-        logger.error(f"Error en _obtener_de_coingecko_v3: {str(e)}", exc_info=True)
-        raise
- 
+    logger.info(f"Procesados {len(ohlcv_rows)} registros de CoinGecko para {symbol}")
+    return ohlcv_rows
+#=================
 def _procesar_datos_coingecko(data: list, symbol: str, convert: str) -> list:
     """Procesa los datos de la API v3 de CoinGecko al formato de nuestra base de datos"""
     processed = []
@@ -1294,3 +1297,4 @@ if __name__ == "__main__":
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
 
         sys.exit(1)  # Salir con código de error
+
