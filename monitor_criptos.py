@@ -1120,6 +1120,8 @@ def resumen():
                 intentos += 1
                 if not datos_obtenidos and intentos < max_intentos:
                     time.sleep(2 ** intentos)  # Backoff exponencial entre intentos
+                # Agrega esto aquí para evitar el rate limit de CoinGecko
+                time.sleep(3)
 
         # 2. Obtener precios actuales para el análisis (manteniendo la lógica original)
         precios = obtener_precios_actuales()
@@ -1290,4 +1292,5 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=port)
     else:
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
+
         sys.exit(1)  # Salir con código de error
