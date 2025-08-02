@@ -485,10 +485,6 @@ def _obtener_de_supabase_cache(symbol: str, convert: str, days: int) -> list:
         return []
  
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
-    """
-    Obtiene datos OHLCV diarios solo desde CoinGecko, con caché local.
-    Añade 'fuente': 'CoinGecko' a cada fila.
-    """
     if not hasattr(obtener_ohlcv_diario, 'cache'):
         obtener_ohlcv_diario.cache = {}
 
@@ -500,23 +496,29 @@ def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> l
             logger.info(f"Usando datos en caché para {symbol}")
             return cached_data
 
-    logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días) desde CoinGecko")
+    logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días)")
 
-    try:
-        data = _obtener_de_coingecko_v3(symbol, convert, days)
-        if data:
-            for row in data:
-                row["fuente"] = "CoinGecko"
-            obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
-            logger.info(f"Obtenidos {len(data)} registros usando CoinGecko")
-            return data
-        else:
-            logger.warning(f"No se obtuvieron datos desde CoinGecko para {symbol}")
-    except Exception as e:
-        logger.error(f"Fallo al obtener datos de CoinGecko: {str(e)}", exc_info=True)
+    estrategias = [
+        (_obtener_de_coinmarketcap_ohlcv, "CoinMarketCap"),
+        (_obtener_de_coingecko_v3, "CoinGecko")
+    ]
 
-    logger.error("Todas las estrategias fallaron (solo CoinGecko activado)")
+    for estrategia_func, fuente in estrategias:
+        try:
+            data = estrategia_func(symbol, convert, days)
+            if data:
+                for row in data:
+                    row["fuente"] = fuente
+                obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
+                logger.info(f"Obtenidos {len(data)} registros usando {fuente}")
+                return data
+        except Exception as e:
+            logger.warning(f"Fallo con {fuente}: {str(e)}")
+            continue
+
+    logger.error("Todas las estrategias fallaron")
     return []
+
    
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
