@@ -44,4 +44,3 @@ services:
         value: "true"
       - key: DIARIO_COUNT
         value: "120"     # cuántas velas diarias traer
-
