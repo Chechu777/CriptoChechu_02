@@ -484,47 +484,42 @@ def _obtener_de_supabase_cache(symbol: str, convert: str, days: int) -> list:
     except Exception as e:
         logger.error(f"Error obteniendo caché de Supabase: {str(e)}")
         return []
- 
+ #================================
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
     """
-    Obtiene datos OHLCV diarios solo desde CoinGecko, con caché local.
-    Añade 'fuente': 'CoinGecko' a cada fila.
+    Obtiene datos OHLCV diarios intentando primero CoinMarketCap y luego CoinGecko.
+    Usa caché local durante 30 minutos.
     """
     if not hasattr(obtener_ohlcv_diario, 'cache'):
         obtener_ohlcv_diario.cache = {}
 
     CACHE_KEY = f"{symbol}_{convert}_{days}"
-
     if CACHE_KEY in obtener_ohlcv_diario.cache:
         cached_data, timestamp = obtener_ohlcv_diario.cache[CACHE_KEY]
         if (datetime.now(timezone.utc) - timestamp) < timedelta(minutes=30):
             logger.info(f"Usando datos en caché para {symbol}")
             return cached_data
 
-    logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días) desde CoinGecko")
- 
-    try:
-        data = _obtener_de_coingecko_v3(symbol, convert, days)
-        if data:
-            for row in data:
-                row["fuente"] = "CoinGecko"
-            obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
-            logger.info(f"Obtenidos {len(data)} registros usando CoinGecko")
-            return data
-        else:
-            logger.warning(f"No se obtuvieron datos desde CoinGecko para {symbol}")
-    except Exception as e:
-        logger.error(f"Fallo al obtener datos de CoinGecko: {str(e)}", exc_info=True)
+    estrategias = [_obtener_de_coinmarketcap_ohlcv, _obtener_de_coingecko_v3]
 
-    logger.error("Todas las estrategias fallaron (solo CoinGecko activado)")
+    for estrategia in estrategias:
+        fuente = estrategia.__name__.replace("_obtener_de_", "").replace("_ohlcv", "").upper()
+        try:
+            logger.info(f"Intentando obtener datos desde {fuente} para {symbol} ({days} días)")
+            data = estrategia(symbol, convert, days)
+            if data:
+                for row in data:
+                    row["fuente"] = fuente
+                obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
+                logger.info(f"Obtenidos {len(data)} registros desde {fuente}")
+                return data
+            else:
+                logger.warning(f"{fuente} no devolvió datos para {symbol}")
+        except Exception as e:
+            logger.error(f"Fallo al obtener datos desde {fuente}: {str(e)}", exc_info=True)
+
+    logger.error("Todas las estrategias fallaron (CoinMarketCap y CoinGecko)")
     return []
-# =================
-@backoff.on_exception(
-    backoff.expo,
-    requests.exceptions.HTTPError,
-    max_tries=5,
-    giveup=lambda e: e.response is not None and e.response.status_code != 429
-)
 # ================
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
@@ -1302,5 +1297,6 @@ if __name__ == "__main__":
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
 
         sys.exit(1)  # Salir con código de error
+
 
 
