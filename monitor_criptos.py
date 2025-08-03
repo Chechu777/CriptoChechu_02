@@ -483,43 +483,87 @@ def _obtener_de_supabase_cache(symbol: str, convert: str, days: int) -> list:
     except Exception as e:
         logger.error(f"Error obteniendo caché de Supabase: {str(e)}")
         return []
- 
+#=================================
+def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> list:
+    from_date = int((datetime.utcnow() - timedelta(days=days)).timestamp())
+    to_date = int(datetime.utcnow().timestamp())
+
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
+    params = {
+        "symbol": symbol.upper(),
+        "convert": convert.upper(),
+        "time_start": from_date,
+        "time_end": to_date
+    }
+    headers = {
+        "X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY"),
+        "Accept": "application/json"
+    }
+
+    response = requests.get(url, params=params, headers=headers, timeout=15)
+    response.raise_for_status()
+    data = response.json()
+
+    quotes = data["data"]["quotes"]
+    ohlcv_rows = []
+
+    for quote in quotes:
+        time_open = quote["time_open"]
+        time_close = quote["time_close"]
+        ohlcv = quote["quote"][convert.upper()]
+
+        row = {
+            "nombre": symbol.upper(),
+            "convert": convert.upper(),
+            "intervalo": "1d",
+            "time_open": time_open,
+            "time_close": time_close,
+            "open": ohlcv["open"],
+            "high": ohlcv["high"],
+            "low": ohlcv["low"],
+            "close": ohlcv["close"],
+            "volume": ohlcv["volume"],
+            "fuente": "CoinMarketCap"
+        }
+        ohlcv_rows.append(row)
+
+    logger.info(f"Procesados {len(ohlcv_rows)} registros válidos para {symbol} desde CoinMarketCap")
+    return ohlcv_rows 
+#=================================
+# === Reemplaza completamente tu función obtener_ohlcv_diario() por esta ===
+
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
+    """
+    Obtiene datos OHLCV diarios usando CoinMarketCap con fallback a CoinGecko.
+    Cachea los resultados por 30 minutos.
+    """
     if not hasattr(obtener_ohlcv_diario, 'cache'):
         obtener_ohlcv_diario.cache = {}
 
     CACHE_KEY = f"{symbol}_{convert}_{days}"
-
     if CACHE_KEY in obtener_ohlcv_diario.cache:
         cached_data, timestamp = obtener_ohlcv_diario.cache[CACHE_KEY]
         if (datetime.now(timezone.utc) - timestamp) < timedelta(minutes=30):
             logger.info(f"Usando datos en caché para {symbol}")
             return cached_data
 
-    logger.info(f"Obteniendo datos OHLCV para {symbol} ({days} días)")
+    estrategias = [_obtener_de_coingecko_v3]
 
-    estrategias = [
-        (_obtener_de_coinmarketcap_ohlcv, "CoinMarketCap"),
-        (_obtener_de_coingecko_v3, "CoinGecko")
-    ]
+    for intento in range(2):
+        for estrategia in estrategias:
+            try:
+                logger.info(f"Obteniendo datos OHLCV para {symbol} (intento {intento + 1})")
+                data = estrategia(symbol, convert, days)
+                if data:
+                    obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
+                    logger.info(f"Obtenidos {len(data)} registros desde {data[0]['fuente']}")
+                    return data
+            except Exception as e:
+                logger.error(f"Error en intento {intento + 1} para {symbol}: {e}", exc_info=True)
 
-    for estrategia_func, fuente in estrategias:
-        try:
-            data = estrategia_func(symbol, convert, days)
-            if data:
-                for row in data:
-                    row["fuente"] = fuente
-                obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
-                logger.info(f"Obtenidos {len(data)} registros usando {fuente}")
-                return data
-        except Exception as e:
-            logger.warning(f"Fallo con {fuente}: {str(e)}")
-            continue
-
-    logger.error("Todas las estrategias fallaron")
+    logger.error("Todas las estrategias fallaron (CoinMarketCap + CoinGecko)")
     return []
-
-   
+#=================================
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
         'BTC': 'bitcoin',
@@ -591,7 +635,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     except Exception as e:
         logger.error(f"Error en _obtener_de_coingecko_v3: {str(e)}", exc_info=True)
         raise
- 
+#================================= 
 def _procesar_datos_coingecko(data: list, symbol: str, convert: str) -> list:
     """Procesa los datos de la API v3 de CoinGecko al formato de nuestra base de datos"""
     processed = []
@@ -866,63 +910,52 @@ def obtener_intradia_cierres(symbol: str, convert="EUR", interval="1h", count=60
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MAX_REGISTROS_DUPLICADOS = 1000  
+ 
+# --- OHLCV Batch ---=====================================
+def guardar_ohlcv_batch(nombre, intervalo, ohlcv_rows, convert, fuente, return_response=False):
+    try:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("Faltan variables SUPABASE_URL o SUPABASE_KEY")
 
-# --- OHLCV Batch ---
-def guardar_ohlcv_batch(nombre: str, intervalo: str, ohlcv_rows: list, convert: str = "EUR", fuente: str = "CoinGecko") -> bool:
-    if not ohlcv_rows:
-        return True
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates"
+        }
 
-    registros_validos = []
-    for row in ohlcv_rows:
-        try:
-            # Validación de datos
-            time_open = datetime.fromisoformat(row['time_open'].replace('Z', '+00:00'))
-            
-            # Verificar si el registro ya existe
-            existe = supabase.table("ohlcv").select("id").match({
+        # Preparar payload con columnas necesarias
+        payload = []
+        for row in ohlcv_rows:
+            payload.append({
                 "nombre": nombre,
-                "intervalo": intervalo,
-                "time_open": time_open.isoformat()
-            }).execute()
-            
-            if existe.data:
-                continue  # Saltar registros existentes
-
-            # Preparar registro válido
-            registros_validos.append({
-                "nombre": nombre,
-                "intervalo": intervalo,
-                "time_open": time_open.isoformat(),
-                "time_close": (time_open + timedelta(days=1)).isoformat() if intervalo == "1d" else (time_open + timedelta(hours=1)).isoformat(),
-                "open": round(float(row['open']), 8),
-                "high": round(float(row['high']), 8),
-                "low": round(float(row['low']), 8),
-                "close": round(float(row['close']), 8),
-                "volume": round(float(row['volume']), 8) if row.get('volume') is not None else None,
                 "convert": convert,
+                "intervalo": intervalo,
+                "time_open": row["time_open"],
+                "time_close": row["time_close"],
+                "open": row["open"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close"],
+                "volume": row["volume"],
                 "fuente": fuente
             })
-        except Exception as e:
-            logger.warning(f"Error procesando fila - {str(e)}")
-            continue
 
-    if not registros_validos:
-        logger.info("No hay registros nuevos para insertar")
+        url = f"{SUPABASE_URL}/rest/v1/ohlcv?on_conflict=nombre,intervalo,time_open&columns=\"low\",\"fuente\",\"volume\",\"convert\",\"intervalo\",\"time_close\",\"time_open\",\"close\",\"high\",\"open\",\"nombre\""
+        response = requests.post(url, headers=headers, json=payload)
+        logger.info(f"HTTP Request: POST {url} -> {response.status_code}")
+
+        response.raise_for_status()
+
+        if return_response:
+            return response
         return True
 
-    try:
-        response = supabase.table("ohlcv").upsert(
-            registros_validos,
-            on_conflict="nombre,intervalo,time_open",
-            returning="minimal"
-        ).execute()
-        
-        return True if response.data else False
-        
     except Exception as e:
-        logger.error(f"Error crítico al insertar: {str(e)}")
-        return False
-  
+        logger.error(f"❌ Error guardando OHLCV para {nombre}: {str(e)}", exc_info=True)
+        return None if return_response else False
+       
+# =========================================
 def obtener_precios_historicos(nombre: str):
     """Histórico reciente desde Supabase con diagnóstico detallado."""
     logger.info(f"Obteniendo históricos para {nombre}")
@@ -1093,32 +1126,42 @@ def resumen():
             intentos = 0
             max_intentos = 2
             datos_obtenidos = False
-            
+
             while intentos < max_intentos and not datos_obtenidos:
                 try:
                     logger.info(f"Obteniendo datos OHLCV para {moneda} (intento {intentos+1})")
                     ohlcv_data = obtener_ohlcv_diario(moneda, days=7)
-                    
+
                     if ohlcv_data:
                         logger.info(f"Guardando {len(ohlcv_data)} registros para {moneda}")
                         fuente_usada = ohlcv_data[0].get("fuente", "Desconocido")
-                        resultado = guardar_ohlcv_batch(
+
+                        # 👉 Guardado y validación directa de respuesta HTTP
+                        response = guardar_ohlcv_batch(
                             nombre=moneda,
                             intervalo="1d",
                             ohlcv_rows=ohlcv_data,
                             convert="EUR",
-                            fuente=fuente_usada
+                            fuente=fuente_usada,
+                            return_response=True  # Nuevo parámetro que debes permitir en la función
                         )
-                        if resultado:
-                            datos_obtenidos = True
+
+                        if response is not None:
+                            logger.info(f"Respuesta HTTP Supabase: {response.status_code}")
+                            if response.status_code in (200, 201):
+                                logger.info(f"✅ Datos guardados correctamente para {moneda}")
+                                datos_obtenidos = True
+                            else:
+                                logger.warning(f"⚠️ Supabase respondió con error {response.status_code} al guardar {moneda}")
                         else:
-                            logger.warning(f"Fallo al guardar datos para {moneda}")
+                            logger.warning(f"❌ La función guardar_ohlcv_batch no devolvió respuesta")
+
                     else:
-                        logger.warning(f"No se obtuvieron datos OHLCV para {moneda}")
-                        
+                        logger.warning(f"❌ No se obtuvieron datos OHLCV para {moneda}")
+
                 except Exception as e:
                     logger.error(f"Error en intento {intentos+1} para {moneda}: {str(e)}", exc_info=True)
-                
+
                 intentos += 1
                 if not datos_obtenidos and intentos < max_intentos:
                     time.sleep(2 ** intentos)  # Backoff exponencial entre intentos
