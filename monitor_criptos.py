@@ -531,7 +531,6 @@ def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> lis
     return ohlcv_rows 
 #=================================
 # === Reemplaza completamente tu función obtener_ohlcv_diario() por esta ===
-
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
     """
     Obtiene datos OHLCV diarios usando CoinMarketCap con fallback a CoinGecko.
@@ -547,7 +546,7 @@ def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> l
             logger.info(f"Usando datos en caché para {symbol}")
             return cached_data
 
-    estrategias = [_obtener_de_coingecko_v3]
+    estrategias = [_obtener_de_coinmarketcap_ohlcv, _obtener_de_coingecko_v3]  # <- CAMBIO: CoinMarketCap primero
 
     for intento in range(2):
         for estrategia in estrategias:
@@ -578,7 +577,6 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
         if not coin_id:
             raise ValueError(f"Moneda {symbol} no soportada")
 
-        # Asegurar que days esté dentro de rango
         if days not in [1, 7, 14, 30, 90, 180, 365]:
             days = max(1, min(days, 365))
 
@@ -595,9 +593,16 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
         }
 
         response = requests.get(url, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
 
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 429:
+                logger.warning("⚠️ Rate limit alcanzado en CoinGecko. Durmiendo 60 segundos antes de reintentar...")
+                time.sleep(60)
+            raise
+
+        data = response.json()
         precios = data.get("prices", [])
         volumenes = data.get("total_volumes", [])
 
