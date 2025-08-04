@@ -532,11 +532,7 @@ def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> lis
 #=================================
 # === Reemplaza completamente tu función obtener_ohlcv_diario() por esta ===
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 7) -> list:
-    estrategias = [
-        _obtener_de_coinmarketcap_ohlcv,
-        _obtener_de_coingecko_v3
-    ]
-
+    estrategias = [_obtener_de_coingecko_v3]
     for estrategia in estrategias:
         try:
             data = estrategia(symbol, convert, days)
@@ -549,7 +545,6 @@ def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 7) -> li
             logger.warning(f"⚠️ Error al obtener datos con {estrategia.__name__}: {str(e)}")
         except Exception as e:
             logger.error(f"❌ Error inesperado en {estrategia.__name__}: {str(e)}", exc_info=True)
-
     return []
 
 #=================================
@@ -588,6 +583,8 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
+                logging.warning("⚠️ Rate limit alcanzado. Durmiendo 90 segundos antes de reintentar...")
+                time.sleep(90)
                 raise requests.exceptions.HTTPError("Rate limit CoinGecko", response=response)
             raise
 
@@ -622,7 +619,6 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
                 #"inserted_at": ahora_madrid().isoformat()
                 "inserted_at": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
             }
-
 
             ohlcv_rows.append(row)
 
