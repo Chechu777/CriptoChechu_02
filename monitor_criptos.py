@@ -556,7 +556,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
         'SHIB': 'shiba-inu',
         'SOL': 'solana'
     }
- 
+
     try:
         coin_id = ids_coingecko.get(symbol.upper())
         if not coin_id:
@@ -571,41 +571,35 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             'days': days,
             'interval': 'daily'
         }
-
         headers = {
             'Accept': 'application/json',
             'User-Agent': 'Python Crypto Bot'
         }
-
         response = requests.get(url, params=params, headers=headers, timeout=15)
-
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
                 if os.getenv("ENV") != "prod":
-                    logging.warning("⚠️ Rate limit alcanzado. Durmiendo 90s...")
+                    logger.warning("⚠️ Rate limit alcanzado. Ejecutando localmente, puedes esperar 90s si quieres.")
                     time.sleep(90)
+                    return _obtener_de_coingecko_v3(symbol, convert, days)  # retry
                 else:
-                    logging.warning("⚠️ Rate limit en producción. Saltando...")
-                return []
-
+                    logger.warning("⚠️ Rate limit en Render. Saltando sin esperar para evitar timeout...")
+                    return []
         data = response.json()
         precios = data.get("prices", [])
         volumenes = data.get("total_volumes", [])
 
         if not precios or not volumenes:
             raise ValueError("No se recibieron datos de precios o volúmenes")
-
         ohlcv_rows = []
-
+        fecha_insercion = ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
         for i in range(len(precios)):
             ts_precio, close = precios[i]
             _, volume = volumenes[i]
-
             dt_open = datetime.utcfromtimestamp(ts_precio / 1000).replace(tzinfo=timezone.utc)
             dt_close = dt_open + timedelta(hours=23, minutes=59, seconds=59)
-
             row = {
                 "nombre": symbol.upper(),
                 "convert": convert.upper(),
@@ -618,12 +612,9 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
                 "close": close,
                 "volume": float(volume),
                 "fuente": "CoinGecko",
-                #"inserted_at": ahora_madrid().isoformat()
-                "inserted_at": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
+                "inserted_at": fecha_insercion
             }
-
             ohlcv_rows.append(row)
-
         logger.info(f"Procesados {len(ohlcv_rows)} registros válidos de {len(precios)} para {symbol}")
         return ohlcv_rows
 
