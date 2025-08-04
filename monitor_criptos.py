@@ -583,13 +583,14 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
-                if os.getenv("ENV") != "prod":
-                    logger.warning("⚠️ Rate limit alcanzado. Ejecutando localmente, puedes esperar 90s si quieres.")
-                    time.sleep(90)
-                    return _obtener_de_coingecko_v3(symbol, convert, days)  # retry
-                else:
+                entorno = os.getenv("ENV", "dev")
+                if entorno.lower() == "prod":
                     logger.warning("⚠️ Rate limit en Render. Saltando sin esperar para evitar timeout...")
                     return []
+                else:
+                    logger.warning("⚠️ Rate limit alcanzado. Ejecutando localmente. Reintentando en 90s...")
+                    time.sleep(90)
+                    return _obtener_de_coingecko_v3(symbol, convert, days)
 
         data = response.json()
         precios = data.get("prices", [])
@@ -629,7 +630,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
 
     except Exception as e:
         logger.error(f"Error en _obtener_de_coingecko_v3: {str(e)}", exc_info=True)
-        raise
+        return []
 #================================= 
 def _procesar_datos_coingecko(data: list, symbol: str, convert: str) -> list:
     """Procesa los datos de la API v3 de CoinGecko al formato de nuestra base de datos"""
