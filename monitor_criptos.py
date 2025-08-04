@@ -571,11 +571,14 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             'days': days,
             'interval': 'daily'
         }
+
         headers = {
             'Accept': 'application/json',
             'User-Agent': 'Python Crypto Bot'
         }
+
         response = requests.get(url, params=params, headers=headers, timeout=15)
+
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -587,19 +590,23 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
                 else:
                     logger.warning("⚠️ Rate limit en Render. Saltando sin esperar para evitar timeout...")
                     return []
+
         data = response.json()
         precios = data.get("prices", [])
         volumenes = data.get("total_volumes", [])
 
         if not precios or not volumenes:
             raise ValueError("No se recibieron datos de precios o volúmenes")
+
         ohlcv_rows = []
-        fecha_insercion = ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
+
         for i in range(len(precios)):
             ts_precio, close = precios[i]
             _, volume = volumenes[i]
+
             dt_open = datetime.utcfromtimestamp(ts_precio / 1000).replace(tzinfo=timezone.utc)
             dt_close = dt_open + timedelta(hours=23, minutes=59, seconds=59)
+
             row = {
                 "nombre": symbol.upper(),
                 "convert": convert.upper(),
@@ -612,9 +619,11 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
                 "close": close,
                 "volume": float(volume),
                 "fuente": "CoinGecko",
-                "inserted_at": fecha_insercion
+                "inserted_at": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
             }
+
             ohlcv_rows.append(row)
+
         logger.info(f"Procesados {len(ohlcv_rows)} registros válidos de {len(precios)} para {symbol}")
         return ohlcv_rows
 
@@ -1322,4 +1331,3 @@ if __name__ == "__main__":
     else:
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
         sys.exit(1)  # Salir con código de error
-
