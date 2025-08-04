@@ -583,10 +583,12 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
-                logging.warning("⚠️ Rate limit alcanzado. Durmiendo 90 segundos antes de reintentar...")
-                time.sleep(90)
-                raise requests.exceptions.HTTPError("Rate limit CoinGecko", response=response)
-            raise
+                if os.getenv("ENV") != "prod":
+                    logging.warning("⚠️ Rate limit alcanzado. Durmiendo 90s...")
+                    time.sleep(90)
+                else:
+                    logging.warning("⚠️ Rate limit en producción. Saltando...")
+                return []
 
         data = response.json()
         precios = data.get("prices", [])
