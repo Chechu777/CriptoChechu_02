@@ -531,37 +531,27 @@ def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> lis
     return ohlcv_rows 
 #=================================
 # === Reemplaza completamente tu función obtener_ohlcv_diario() por esta ===
-def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 30) -> list:
-    """
-    Obtiene datos OHLCV diarios usando CoinMarketCap con fallback a CoinGecko.
-    Cachea los resultados por 30 minutos.
-    """
-    if not hasattr(obtener_ohlcv_diario, 'cache'):
-        obtener_ohlcv_diario.cache = {}
+def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 7) -> list:
+    estrategias = [
+        _obtener_de_coinmarketcap_ohlcv,
+        _obtener_de_coingecko_v3
+    ]
 
-    CACHE_KEY = f"{symbol}_{convert}_{days}"
-    if CACHE_KEY in obtener_ohlcv_diario.cache:
-        cached_data, timestamp = obtener_ohlcv_diario.cache[CACHE_KEY]
-        if (datetime.now(timezone.utc) - timestamp) < timedelta(minutes=30):
-            logger.info(f"Usando datos en caché para {symbol}")
-            return cached_data
+    for estrategia in estrategias:
+        try:
+            data = estrategia(symbol, convert, days)
+            if data:
+                return data
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                logger.warning(f"⚠️ Rate limit alcanzado en {estrategia.__name__}. Saltando a la siguiente...")
+                continue
+            logger.warning(f"⚠️ Error al obtener datos con {estrategia.__name__}: {str(e)}")
+        except Exception as e:
+            logger.error(f"❌ Error inesperado en {estrategia.__name__}: {str(e)}", exc_info=True)
 
-    estrategias = [_obtener_de_coinmarketcap_ohlcv, _obtener_de_coingecko_v3]  # <- CAMBIO: CoinMarketCap primero
-
-    for intento in range(2):
-        for estrategia in estrategias:
-            try:
-                logger.info(f"Obteniendo datos OHLCV para {symbol} (intento {intento + 1})")
-                data = estrategia(symbol, convert, days)
-                if data:
-                    obtener_ohlcv_diario.cache[CACHE_KEY] = (data, datetime.now(timezone.utc))
-                    logger.info(f"Obtenidos {len(data)} registros desde {data[0]['fuente']}")
-                    return data
-            except Exception as e:
-                logger.error(f"Error en intento {intento + 1} para {symbol}: {e}", exc_info=True)
-
-    logger.error("Todas las estrategias fallaron (CoinMarketCap + CoinGecko)")
     return []
+
 #=================================
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
@@ -571,7 +561,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
         'SHIB': 'shiba-inu',
         'SOL': 'solana'
     }
-
+ 
     try:
         coin_id = ids_coingecko.get(symbol.upper())
         if not coin_id:
@@ -598,8 +588,7 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
-                logger.warning("⚠️ Rate limit alcanzado en CoinGecko. Durmiendo 60 segundos antes de reintentar...")
-                time.sleep(60)
+                raise requests.exceptions.HTTPError("Rate limit CoinGecko", response=response)
             raise
 
         data = response.json()
@@ -629,8 +618,11 @@ def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
                 "low": close,
                 "close": close,
                 "volume": float(volume),
-                "fuente": "CoinGecko"
+                "fuente": "CoinGecko",
+                #"inserted_at": ahora_madrid().isoformat()
+                "inserted_at": ahora_madrid().strftime("%Y-%m-%d %H:%M:%S.%f")
             }
+
 
             ohlcv_rows.append(row)
 
@@ -1341,3 +1333,4 @@ if __name__ == "__main__":
     else:
         logger.error("=== PRUEBAS FALLIDAS - NO SE INICIA EL SERVIDOR ===")
         sys.exit(1)  # Salir con código de error
+
