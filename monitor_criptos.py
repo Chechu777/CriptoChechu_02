@@ -530,23 +530,24 @@ def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> lis
     logger.info(f"Procesados {len(ohlcv_rows)} registros válidos para {symbol} desde CoinMarketCap")
     return ohlcv_rows 
 #=================================
-# === Reemplaza completamente tu función obtener_ohlcv_diario() por esta ===
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 7) -> list:
-    estrategias = [_obtener_de_coingecko_v3]
+    estrategias = [_obtener_de_coingecko_v3, _obtener_de_coinmarketcap]
+    errores = []
+
     for estrategia in estrategias:
         try:
             data = estrategia(symbol, convert, days)
             if data:
+                logger.info(f"✅ Datos OHLCV obtenidos de {estrategia.__name__} para {symbol}")
                 return data
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                logger.warning(f"⚠️ Rate limit alcanzado en {estrategia.__name__}. Saltando a la siguiente...")
-                continue
-            logger.warning(f"⚠️ Error al obtener datos con {estrategia.__name__}: {str(e)}")
+            else:
+                logger.warning(f"⚠️ {estrategia.__name__} devolvió datos vacíos para {symbol}")
         except Exception as e:
-            logger.error(f"❌ Error inesperado en {estrategia.__name__}: {str(e)}", exc_info=True)
-    return []
+            errores.append(f"{estrategia.__name__}: {str(e)}")
+            logger.warning(f"⚠️ Error en {estrategia.__name__}: {str(e)}")
 
+    logger.error(f"❌ No se pudo obtener OHLCV para {symbol}. Errores: {errores}")
+    return []
 #=================================
 def _obtener_de_coingecko_v3(symbol: str, convert: str, days: int) -> list:
     ids_coingecko = {
