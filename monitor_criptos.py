@@ -1079,7 +1079,7 @@ def construir_mensaje_moneda(moneda, precio, rsi, señal):
     return msg
 
 from concurrent.futures import ThreadPoolExecutor
- 
+
 @app.route("/resumen")
 def resumen():
     logger.info("=== INICIO DE EJECUCIÓN ===")
@@ -1100,14 +1100,13 @@ def resumen():
                         logger.info(f"Guardando {len(ohlcv_data)} registros para {moneda}")
                         fuente_usada = ohlcv_data[0].get("fuente", "Desconocido")
 
-                        # 👉 Guardado y validación directa de respuesta HTTP
                         response = guardar_ohlcv_batch(
                             nombre=moneda,
                             intervalo="1d",
                             ohlcv_rows=ohlcv_data,
                             convert="EUR",
                             fuente=fuente_usada,
-                            return_response=True  # Nuevo parámetro que debes permitir en la función
+                            return_response=True
                         )
 
                         if response is not None:
@@ -1119,7 +1118,6 @@ def resumen():
                                 logger.warning(f"⚠️ Supabase respondió con error {response.status_code} al guardar {moneda}")
                         else:
                             logger.warning(f"❌ La función guardar_ohlcv_batch no devolvió respuesta")
-
                     else:
                         logger.warning(f"❌ No se obtuvieron datos OHLCV para {moneda}")
 
@@ -1128,9 +1126,9 @@ def resumen():
 
                 intentos += 1
                 if not datos_obtenidos and intentos < max_intentos:
-                    time.sleep(2 ** intentos)  # Backoff exponencial entre intentos
+                    time.sleep(2 ** intentos)
 
-        # 2. Obtener precios actuales para el análisis (manteniendo la lógica original)
+        # 2. Obtener precios actuales para el análisis
         precios = obtener_precios_actuales()
         if not precios:
             enviar_telegram("⚠️ <b>Error crítico:</b> No se pudieron obtener los precios actuales")
@@ -1138,65 +1136,14 @@ def resumen():
 
         mensaje = "📊 <b>Análisis Cripto Avanzado</b>\n════════════════════════\n\n"
         ahora = ahora_madrid()
- 
-        # Procesar cada moneda en paralelo (manteniendo la lógica original)
-#=====================================
-        def procesar_moneda(moneda):
-            try:
-                precio = precios[moneda]
-                historicos = obtener_precios_historicos(moneda)
-                
-                if historicos is None or len(historicos) < INTERVALO_RSI:
-                    return f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes\n\n"
 
-                # Calcular indicadores
-                rsi = calcular_rsi_mejorado(historicos)
-                señal = generar_señal_rsi(rsi, precio, historicos, moneda)
-
-                # Insertar precio con RSI
-                insertar_precio(moneda, precio, rsi)
-
-                # Obtener el último ID insertado para esa moneda
-                resp = supabase.table("precios")\
-                    .select("id")\
-                    .eq("nombre", moneda)\
-                    .order("fecha", desc=True)\
-                    .limit(1)\
-                    .execute()
-
-                if resp.data:
-                    ultimo_id = resp.data[0]["id"]
-                    recomendacion_texto = recomendar_accion(
-                        señal.get('señal'),
-                        rsi,
-                        señal['indicadores'].get('macd_raw'),
-                        señal['indicadores'].get('macd_signal_raw'),
-                        señal.get('confianza'),
-                        señal['indicadores'].get('macd_delta'),
-                        señal['indicadores'].get('macd_vol'),
-                        señal.get('tendencia'),
-                        señal['indicadores'].get('zscore20'),
-                        señal['indicadores'].get('drawdown_pct')
-                    )
-
-                    supabase.table("precios").update({
-                        "recomendacion": recomendacion_texto,
-                        "confianza": señal.get("confianza")
-                    }).eq("id", ultimo_id).execute()
-
-                return construir_mensaje_moneda(moneda, precio, rsi, señal)
-
-            except Exception as e:
-                logger.error(f"Error procesando {moneda}: {str(e)}", exc_info=True)
-                return f"<b>{moneda}:</b> Error en análisis\n\n"
-#=====================================
-        # Ejecutar en paralelo
+        # 3. Procesar cada moneda en paralelo
         with ThreadPoolExecutor(max_workers=3) as executor:
-            resultados = list(executor.map(procesar_moneda, MONEDAS))
-        
+            resultados = list(executor.map(procesar_moneda, [(moneda, precios) for moneda in MONEDAS]))
+
         mensaje += "".join(resultados)
         mensaje += f"════════════════════════\n🔄 <i>Actualizado: {formatear_fecha(ahora)}</i>"
-        
+
         enviar_telegram(mensaje)
         return "Resumen enviado", 200
 
@@ -1204,7 +1151,62 @@ def resumen():
         logger.error(f"Error general en resumen: {str(e)}", exc_info=True)
         enviar_telegram("⚠️ <b>Error crítico:</b> Fallo en el análisis general")
         return "Error interno", 500
- 
+
+        # Procesar cada moneda en paralelo (manteniendo la lógica original)
+#=====================================
+def procesar_moneda(args):
+    moneda, precios = args
+    try:
+        precio = precios[moneda]
+        historicos = obtener_precios_historicos(moneda)
+
+        if historicos is None or len(historicos) < INTERVALO_RSI:
+            return f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes\n\n"
+
+        # Calcular indicadores
+        rsi = calcular_rsi_mejorado(historicos)
+        señal = generar_señal_rsi(rsi, precio, historicos, moneda)
+
+        # Insertar precio con RSI
+        insertar_precio(moneda, precio, rsi)
+
+        # Obtener el último ID insertado para esa moneda
+        resp = supabase.table("precios")\
+            .select("id")\
+            .eq("nombre", moneda)\
+            .order("fecha", desc=True)\
+            .limit(1)\
+            .execute()
+
+        if resp.data:
+            ultimo_id = resp.data[0]["id"]
+            recomendacion_texto = recomendar_accion(
+                señal.get('señal'),
+                rsi,
+                señal['indicadores'].get('macd_raw'),
+                señal['indicadores'].get('macd_signal_raw'),
+                señal.get('confianza'),
+                señal['indicadores'].get('macd_delta'),
+                señal['indicadores'].get('macd_vol'),
+                señal.get('tendencia'),
+                señal['indicadores'].get('zscore20'),
+                señal['indicadores'].get('drawdown_pct')
+            )
+
+            try:
+                supabase.table("precios").update({
+                    "recomendacion": recomendacion_texto,
+                    "confianza": señal.get("confianza")
+                }).eq("id", ultimo_id).execute()
+            except Exception as e:
+                logger.warning(f"No se pudo actualizar recomendación para {moneda}: {e}")
+
+        return construir_mensaje_moneda(moneda, precio, rsi, señal)
+
+    except Exception as e:
+        logger.error(f"Error procesando {moneda}: {str(e)}", exc_info=True)
+        return f"<b>{moneda}:</b> Error en análisis\n\n"
+
  # === función auxiliar para verificar registros existentes === 
 def _existe_registro(nombre: str, intervalo: str, time_open: str) -> bool:
     """Verifica si un registro ya existe en la base de datos (ahora opcional gracias a UPSERT)"""
