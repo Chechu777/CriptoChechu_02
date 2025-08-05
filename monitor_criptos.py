@@ -434,7 +434,7 @@ def recomendar_accion(
 
 # --- IO: APIs / DB ---
 def obtener_precios_actuales():
-    """CoinMarketCap EUR"""
+    """CoinMarketCap EUR (con fallback parcial)"""
     try:
         logger.info("Obteniendo precios actuales desde CoinMarketCap...")
         url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
@@ -444,6 +444,8 @@ def obtener_precios_actuales():
         response.raise_for_status()
         datos = response.json()
         precios = {}
+        errores = []
+
         for m in MONEDAS:
             try:
                 precio = float(datos["data"][m]["quote"]["EUR"]["price"])
@@ -451,14 +453,22 @@ def obtener_precios_actuales():
                     raise ValueError("Precio no positivo")
                 precios[m] = precio
                 logger.info(f"Precio obtenido para {m}: {precio} EUR")
-            except (KeyError, ValueError) as e:
-                logger.error(f"Error procesando {m}: {e}")
-                return None
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener precio para {m}: {e}")
+                errores.append(m)
+
+        if not precios:
+            raise ValueError("No se pudo obtener ningún precio válido")
+
+        if errores:
+            logger.warning(f"⚠️ Monedas con error: {errores}")
+
         return precios
-    except requests.exceptions.RequestException:
-        logger.error("Error API CoinMarketCap", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"Error general en obtener_precios_actuales: {str(e)}", exc_info=True)
         return None
- 
+#================================
 def _cmc_headers():
     return {"Accepts": "application/json", "X-CMC_PRO_API_KEY": CMC_API_KEY}
 
@@ -484,54 +494,11 @@ def _obtener_de_supabase_cache(symbol: str, convert: str, days: int) -> list:
         logger.error(f"Error obteniendo caché de Supabase: {str(e)}")
         return []
 #=================================
-def _obtener_de_coinmarketcap_ohlcv(symbol: str, convert: str, days: int) -> list:
-    from_date = int((datetime.utcnow() - timedelta(days=days)).timestamp())
-    to_date = int(datetime.utcnow().timestamp())
-
-    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
-    params = {
-        "symbol": symbol.upper(),
-        "convert": convert.upper(),
-        "time_start": from_date,
-        "time_end": to_date
-    }
-    headers = {
-        "X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY"),
-        "Accept": "application/json"
-    }
-
-    response = requests.get(url, params=params, headers=headers, timeout=15)
-    response.raise_for_status()
-    data = response.json()
-
-    quotes = data["data"]["quotes"]
-    ohlcv_rows = []
-
-    for quote in quotes:
-        time_open = quote["time_open"]
-        time_close = quote["time_close"]
-        ohlcv = quote["quote"][convert.upper()]
-
-        row = {
-            "nombre": symbol.upper(),
-            "convert": convert.upper(),
-            "intervalo": "1d",
-            "time_open": time_open,
-            "time_close": time_close,
-            "open": ohlcv["open"],
-            "high": ohlcv["high"],
-            "low": ohlcv["low"],
-            "close": ohlcv["close"],
-            "volume": ohlcv["volume"],
-            "fuente": "CoinMarketCap"
-        }
-        ohlcv_rows.append(row)
-
-    logger.info(f"Procesados {len(ohlcv_rows)} registros válidos para {symbol} desde CoinMarketCap")
-    return ohlcv_rows 
+ 
 #=================================
 def obtener_ohlcv_diario(symbol: str, convert: str = "EUR", days: int = 7) -> list:
-    estrategias = [_obtener_de_coingecko_v3, _obtener_de_coinmarketcap]
+    USAR_CMC_DIARIO = _env_bool("USAR_CMC_DIARIO", True)
+    estrategias = [_obtener_de_coinmarketcap, _obtener_de_coingecko_v3] if USAR_CMC_DIARIO else [_obtener_de_coingecko_v3, _obtener_de_coinmarketcap]
     errores = []
 
     for estrategia in estrategias:
