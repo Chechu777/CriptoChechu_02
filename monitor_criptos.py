@@ -1158,11 +1158,29 @@ def procesar_moneda(args):
     moneda, precios = args
     try:
         precio = precios[moneda]
+        logger.info(f"{moneda}: Obteniendo precios históricos...")
         historicos = obtener_precios_historicos(moneda)
+        if historicos is None:
+            logger.warning(f"{moneda}: Históricos es None")
+        elif len(historicos) < INTERVALO_RSI:
+            logger.warning(f"{moneda}: Solo hay {len(historicos)} datos históricos (se necesitan al menos {INTERVALO_RSI})")
+        else:
+            logger.info(f"{moneda}: {len(historicos)} datos históricos OK")
+        logger.info(f"{moneda}: Obteniendo precios históricos...")
+        historicos = obtener_precios_historicos(moneda)
+        if historicos is None:
+            logger.warning(f"{moneda}: Históricos es None")
+        elif len(historicos) < INTERVALO_RSI:
+            logger.warning(f"{moneda}: Solo hay {len(historicos)} datos históricos (se necesitan al menos {INTERVALO_RSI})")
+        else:
+            logger.info(f"{moneda}: {len(historicos)} datos históricos OK")
 
-        if historicos is None or len(historicos) < INTERVALO_RSI:
+        if historicos is None or len(historicos) < 10:
             return f"<b>{moneda}:</b> {precio:,.8f} €\n⚠️ Datos insuficientes\n\n"
-
+        elif len(historicos) < INTERVALO_RSI:
+            rsi = calcular_rsi_mejorado(historicos, periodo=len(historicos))  # si tu función acepta parámetro `periodo`
+        else:
+            rsi = calcular_rsi_mejorado(historicos)
         # Calcular indicadores
         rsi = calcular_rsi_mejorado(historicos)
         señal = generar_señal_rsi(rsi, precio, historicos, moneda)
