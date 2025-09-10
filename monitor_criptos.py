@@ -120,7 +120,8 @@ def endpoint_resumen():
 def endpoint_historicos_auto():
     """
     Recorre monedas (o ?monedas=BTC,ETH) y llama a guardar_datos(...).
-    También llama guardar_datos_dias(...) para históricos diarios si se solicita (?dias_dias=90)
+    También llama guardar_datos_dias(...) para históricos diarios si se solicita (?dias_dias=90).
+    Incluye delay entre monedas para evitar rate limits.
     """
     monedas = request.args.get("monedas")
     if monedas:
@@ -142,6 +143,7 @@ def endpoint_historicos_auto():
             except Exception as e:
                 logger.exception(f"Error guardando datos 1h para {m}")
                 r1 = f"error: {str(e)}"
+
             try:
                 logger.info(f"Guardando históricos 1d para {m} (dias={dias_dias})")
                 r2 = guardar_datos_dias(moneda=m, dias=dias_dias)
@@ -149,9 +151,14 @@ def endpoint_historicos_auto():
             except Exception as e:
                 logger.exception(f"Error guardando datos 1d para {m}")
                 r2 = {"error": str(e)}
+
             resultados.append({"moneda": m, "1h": r1, "1d": r2})
 
+            # 🔹 Anti-rate-limit → espera 2s antes de pasar a la siguiente moneda
+            time.sleep(2)
+
         return jsonify({"status": "ok", "resultados": resultados})
+
     except Exception as e:
         logger.exception("Error en /historicos_auto")
         return jsonify({"status": "error", "error": str(e), "trace": traceback.format_exc()}), 500
