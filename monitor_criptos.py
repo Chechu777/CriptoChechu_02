@@ -1,5 +1,5 @@
 # monitor_criptos.py
-import os, io, logging, traceback
+import os, io, logging, traceback, time
 from datetime import datetime
 from flask import Flask, jsonify, request, send_file, Response
 import requests, dotenv
@@ -210,3 +210,4 @@ def endpoint_grafico_send():
 if __name__ == "__main__":
     logger.info(f"Arrancando monitor_criptos en {HOST}:{PORT}")
     app.run(host=HOST, port=PORT, debug=False)
+
