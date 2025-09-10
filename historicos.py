@@ -117,6 +117,54 @@ def obtener_historicos_binance(moneda, dias, timeframe='1h'):
     return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
 
 # ============================
+# ============================
+# 🔹 Obtener históricos desde CoinGecko
+def obtener_historicos_coingecko(moneda, dias, timeframe='1h'):
+    id_map = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "ADA": "cardano",
+        "SHIB": "shiba-inu",
+        "SOL": "solana"
+    }
+    if moneda not in id_map:
+        logger.error(f"{moneda}: no mapeado en CoinGecko")
+        return pd.DataFrame()
+
+    interval = "hourly" if timeframe == "1h" else "daily"
+    url = (f"https://api.coingecko.com/api/v3/coins/{id_map[moneda]}/market_chart"
+           f"?vs_currency=eur&days={dias}&interval={interval}")
+
+    r = requests.get(url, timeout=30)
+    if not r.ok:
+        logger.error(f"{moneda}: error en CoinGecko {r.status_code} {r.text}")
+        return pd.DataFrame()
+
+    data = r.json()
+    if "prices" not in data:
+        logger.warning(f"{moneda}: sin datos válidos en CoinGecko")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data["prices"], columns=["timestamp", "close"])
+    df["time_open"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+
+    if timeframe == "1h":
+        delta = pd.to_timedelta("1h")
+    else:
+        delta = pd.to_timedelta("1d")
+
+    # CoinGecko no da open/high/low → usamos close como proxy
+    df["open"] = df["close"]
+    df["high"] = df["close"]
+    df["low"] = df["close"]
+    df["volume"] = [v[1] for v in data.get("total_volumes", [])][:len(df)]
+
+    df["time_close"] = df["time_open"] + delta
+    df["nombre"] = moneda
+    df["fuente"] = "coingecko"
+
+    return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
+
 # 🔹 Indicadores
 def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
@@ -220,11 +268,18 @@ def insertar_filas_dias(df: pd.DataFrame) -> int:
 
     logger.info(f"Insertados {total_insertados} registros nuevos en ohlcv_historicos_dias (duplicados ignorados)")
     return total_insertados
-
-# ============================
+# ============================ # 🔹 Wrapper para Binance → CoinGecko
+def obtener_historicos(moneda, dias, timeframe="1h"):
+    try:
+        df = obtener_historicos_binance(moneda, dias, timeframe)
+        if not df.empty:
+            return df
+    except Exception as e:
+        logger.warning(f"{moneda}: Binance falló ({e}), probando CoinGecko...")
+    return obtener_historicos_coingecko(moneda, dias, timeframe)
 # 🔹 Guardar datos
 def guardar_datos(moneda, dias, timeframe="1h", rellenar_huecos=True):
-    df = obtener_historicos_binance(moneda, dias, timeframe)
+    df = obtener_historicos(moneda, dias, timeframe)
     if df.empty:
         return f"{moneda}: ❌ sin datos válidos"
 
@@ -245,7 +300,7 @@ def guardar_datos(moneda, dias, timeframe="1h", rellenar_huecos=True):
     return f"{moneda}: ✅ completado ({inserted} registros)"
 
 def guardar_datos_dias(moneda: str, dias: int = 90) -> dict:
-    df = obtener_historicos_binance(moneda, dias, "1d")
+    df = obtener_historicos(moneda, dias, "1d")
     if df.empty:
         return {"moneda": moneda, "insertados": 0}
 
