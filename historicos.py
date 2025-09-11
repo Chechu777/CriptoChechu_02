@@ -31,6 +31,15 @@ SYMBOL_MAP = {
     "SOL": "SOL/USDT",
 }
 
+# Mapas de símbolos Kraken (evita load_markets pesado)
+KRAKEN_SYMBOLS = {
+    "BTC": "BTC/EUR",
+    "ETH": "ETH/EUR",
+    "ADA": "ADA/EUR",
+    "SHIB": "SHIB/EUR",
+    "SOL": "SOL/EUR",
+}
+
 # ============================
 def generar_grafico(moneda: str, dias: int = 30):
     """Genera gráfico de precios, RSI y MACD de los últimos X días"""
@@ -208,23 +217,21 @@ def insertar_filas_dias(df: pd.DataFrame) -> int:
 # ============================ # 
 def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
     """
-    Descarga OHLCV desde Kraken usando ccxt.
+    Descarga OHLCV desde Kraken usando ccxt, con símbolos fijos (sin load_markets).
     """
     try:
-        exchange = ccxt.kraken()
-        markets = exchange.load_markets()
+        exchange = ccxt.kraken({
+            "enableRateLimit": True,
+            "timeout": 10000  # 10s para evitar bloqueos
+        })
+
+        symbol = KRAKEN_SYMBOLS.get(moneda.upper())
+        if not symbol:
+            logger.warning(f"{moneda}: no soportada en Kraken")
+            return pd.DataFrame()
 
         ahora_utc = datetime.now(timezone.utc)
-        desde = exchange.parse8601((ahora_utc - timedelta(days=dias)).strftime('%Y-%m-%dT%H:%M:%S'))
-
-        # Kraken no siempre usa /EUR, suele ser /USD
-        if f"{moneda}/EUR" in markets:
-            symbol = f"{moneda}/EUR"
-        elif f"{moneda}/USD" in markets:
-            symbol = f"{moneda}/USD"
-        else:
-            logger.warning(f"{moneda}: no disponible en Kraken")
-            return pd.DataFrame()
+        desde = exchange.milliseconds() - dias * 24 * 60 * 60 * 1000
 
         logger.info(f"[DESCARGA] {moneda} ({dias} días, {timeframe}) desde Kraken con symbol={symbol}...")
 
@@ -239,32 +246,38 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
         delta = pd.to_timedelta("1d") if timeframe == "1d" else pd.to_timedelta("1h")
         df["time_close"] = df["time_open"] + delta
 
+        # Ajustar rango esperado
         expected_times = pd.date_range(
             start=df["time_open"].min(),
-            end=pd.Timestamp(ahora_utc).floor("h"),
+            end=ahora_utc.floor("h"),
             freq="1h" if timeframe == "1h" else "1d",
             tz="UTC"
         )
         df = df.set_index("time_open").reindex(expected_times)
         df.index.name = "time_open"
 
-        df["nombre"] = moneda
-        df["fuente"] = "kraken"
-
-        # Relleno forward/backward para gaps
-        df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].ffill().bfill()
+        # Completar datos
+        df[["open", "high", "low", "close", "volume"]] = (
+            df[["open", "high", "low", "close", "volume"]].ffill().bfill()
+        )
         df["volume"] = df["volume"].fillna(0)
 
+        df["nombre"] = moneda
+        df["fuente"] = "kraken"
         df["time_close"] = df.index + delta
+
         df = df.reset_index()
 
-        return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
+        return df[[
+            "nombre", "time_open", "time_close",
+            "open", "high", "low", "close", "volume", "fuente"
+        ]]
 
     except Exception as e:
         logger.error(f"{moneda}: error en obtener_historicos_kraken → {e}")
         return pd.DataFrame()
-
 # ============================ # 
+
 def obtener_historicos(moneda, dias, timeframe="1h"):
     """
     Intenta obtener históricos en cascada:
