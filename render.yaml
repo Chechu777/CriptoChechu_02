@@ -4,6 +4,7 @@ services:
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn wsgi:application"
+    startCommand: gunicorn -w 2 -k sync -t 120 monitor_criptos:app
     envVars:
       # --- Secrets: define los valores SOLO en el panel de Render ---
       - key: TELEGRAM_BOT_TOKEN
@@ -43,4 +44,5 @@ services:
       - key: USAR_CMC_DIARIO
         value: "true"
       - key: DIARIO_COUNT
+
         value: "120"     # cuántas velas diarias traer
