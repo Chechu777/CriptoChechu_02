@@ -121,6 +121,53 @@ def obtener_historicos_binance(moneda, dias, timeframe='1h'):
 # 🔹 Obtener históricos desde CoinGecko
 def obtener_historicos_coingecko(moneda, dias, timeframe='1h'):
     id_map = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "ADA": "cardano",
+        "SHIB": "shiba-inu",
+        "SOL": "solana"
+    }
+    if moneda not in id_map:
+        logger.error(f"{moneda}: no mapeado en CoinGecko")
+        return pd.DataFrame()
+
+    interval = "hourly" if timeframe == "1h" else "daily"
+    url = (f"https://api.coingecko.com/api/v3/coins/{id_map[moneda]}/market_chart"
+           f"?vs_currency=eur&days={dias}&interval={interval}")
+
+    r = requests.get(url, timeout=30)
+    if not r.ok:
+        logger.error(f"{moneda}: error en CoinGecko {r.status_code} {r.text}")
+        return pd.DataFrame()
+
+    data = r.json()
+    if "prices" not in data:
+        logger.warning(f"{moneda}: sin datos válidos en CoinGecko")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data["prices"], columns=["timestamp", "close"])
+    df["time_open"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+
+    if timeframe == "1h":
+        delta = pd.to_timedelta("1h")
+    else:
+        delta = pd.to_timedelta("1d")
+
+    # CoinGecko no da open/high/low → usamos close como proxy
+    df["open"] = df["close"]
+    df["high"] = df["close"]
+    df["low"] = df["close"]
+    df["volume"] = [v[1] for v in data.get("total_volumes", [])][:len(df)]
+
+    df["time_close"] = df["time_open"] + delta
+    df["nombre"] = moneda
+    df["fuente"] = "coingecko"
+
+    return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
+# ============================
+# 🔹 Obtener históricos desde CoinGecko
+def obtener_historicos_coingecko(moneda, dias, timeframe='1h'):
+    id_map = {
         "BTC": "bitcoin", "ETH": "ethereum",
         "ADA": "cardano", "SHIB": "shiba-inu", "SOL": "solana"
     }
@@ -291,6 +338,8 @@ def obtener_historicos(moneda, dias, timeframe="1h"):
     # ====================
     logger.error(f"{moneda}: ❌ sin datos válidos en ninguna fuente")
     return pd.DataFrame()
+# ====================
+
 # 🔹 Guardar datos
 def guardar_datos(moneda, dias, timeframe="1h", rellenar_huecos=True):
     df = obtener_historicos(moneda, dias, timeframe)
@@ -453,7 +502,7 @@ import time
 
 def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
     """
-    Usa CoinGecko como último recurso, con backoff por rate limit.
+    Usa CoinGecko como último recurso, con backoff limitado para no bloquear Render.
     """
     id_map = {
         "BTC": "bitcoin", "ETH": "ethereum",
@@ -461,27 +510,34 @@ def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
     }
     if moneda not in id_map:
         return pd.DataFrame()
+
     interval = "hourly" if timeframe == "1h" else "daily"
     url = (f"https://api.coingecko.com/api/v3/coins/{id_map[moneda]}/market_chart"
            f"?vs_currency=eur&days={dias}&interval={interval}")
-    intentos, espera = 0, 5
-    while intentos < 5:
-        r = requests.get(url, timeout=30)
+
+    intentos, espera = 0, 1  # 🔹 arranca en 1s
+    while intentos < 3:       # 🔹 máximo 3 reintentos
+        r = requests.get(url, timeout=20)
         if r.status_code == 429:
-            logger.warning(f"{moneda}: rate limit en CoinGecko, esperando {espera}s...")
+            logger.warning(f"{moneda}: rate limit en CoinGecko, reintentando en {espera}s...")
             time.sleep(espera)
-            espera *= 2
+            espera = min(espera * 2, 5)  # 🔹 nunca más de 5s
             intentos += 1
             continue
         if not r.ok:
             logger.error(f"{moneda}: error en CoinGecko {r.status_code} {r.text}")
             return pd.DataFrame()
         break
+
     if r.status_code != 200:
+        logger.error(f"{moneda}: fallo definitivo en CoinGecko (status={r.status_code})")
         return pd.DataFrame()
+
     data = r.json()
     if "prices" not in data:
+        logger.warning(f"{moneda}: sin 'prices' en respuesta de CoinGecko")
         return pd.DataFrame()
+
     df = pd.DataFrame({
         "time_open": [pd.to_datetime(p[0], unit="ms", utc=True) for p in data["prices"]],
         "close": [p[1] for p in data["prices"]],
@@ -490,9 +546,11 @@ def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
     df["high"] = df["close"]
     df["low"] = df["close"]
     df["volume"] = [v[1] for v in data.get("total_volumes", [[0, 0]] * len(df))]
+
     df["time_close"] = df["time_open"] + (pd.to_timedelta("1h") if timeframe == "1h" else pd.to_timedelta("1d"))
     df["nombre"] = moneda
     df["fuente"] = "coingecko"
+
     return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
 
 # ============================
@@ -504,3 +562,4 @@ if __name__ == "__main__":
         print(guardar_datos_dias(m, dias=30))
     print("=== ANALISIS ===")
     print(resumen_completo(monedas))
+
