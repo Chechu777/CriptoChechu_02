@@ -228,7 +228,7 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
 
         logger.info(f"[DESCARGA] {moneda} ({dias} días, {timeframe}) desde Kraken con symbol={symbol}...")
 
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=desde)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=desde, limit=1000)
         if not ohlcv:
             logger.warning(f"{moneda}: sin datos válidos en Kraken")
             return pd.DataFrame()
@@ -340,8 +340,8 @@ def guardar_datos_dias(moneda: str, dias: int = 90) -> dict:
 # ============================
 # 🔹 Utilidades fetch
 def obtener_fechas_existentes(moneda):
-    url = f"{SUPABASE_URL}/rest/v1/ohlcv_historicos?select=time_open&nombre=eq.{moneda}"
-    r = requests.get(url, headers=HEADERS)
+    url = f"{SUPABASE_URL}/rest/v1/ohlcv_historicos?select=time_open&nombre=eq.{moneda}&limit=2000&order=time_open.desc"
+    r = requests.get(url, headers=HEADERS, timeout=20)
     if r.status_code == 200:
         existentes = [fila["time_open"] for fila in r.json()]
         return set(pd.to_datetime(existentes))
