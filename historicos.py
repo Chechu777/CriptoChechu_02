@@ -260,13 +260,12 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
         df["time_close"] = df["time_open"] + delta
 
         # 🔧 Aquí estaba el bug → usamos pd.Timestamp para floor()
-        end_time = pd.Timestamp(ahora_utc, tz="UTC").floor("h" if timeframe == "1h" else "d")
+        end_time = pd.Timestamp(ahora_utc).tz_convert("UTC").floor("h" if timeframe == "1h" else "d")
         expected_times = pd.date_range(
             start=df["time_open"].min(),
             end=end_time,
-            freq="1h" if timeframe == "1h" else "1d",
-            tz="UTC"
-        )
+            freq="1h" if timeframe == "1h" else "1d"
+        ).tz_convert("UTC")
 
         df = df.set_index("time_open").reindex(expected_times)
         df.index.name = "time_open"
@@ -311,6 +310,14 @@ def obtener_historicos(moneda, dias, timeframe="1h"):
             return df
     except Exception as e:
         logger.warning(f"{moneda}: CoinMarketCap falló ({e}), probando CoinGecko...")
+
+    # 2b) Binance
+    try:
+        df = obtener_historicos_binance(moneda, dias, timeframe)
+        if not df.empty:
+            return df
+    except Exception as e:
+        logger.warning(f"{moneda}: Binance falló ({e}), probando CoinGecko...")
 
     # 3) CoinGecko
     try:
@@ -484,6 +491,34 @@ def obtener_historicos_cmc(moneda, dias, timeframe="1h"):
             "fuente": "coinmarketcap"
         })
     return pd.DataFrame(registros)
+# ============================
+def obtener_historicos_binance(moneda, dias, timeframe="1h"):
+    try:
+        exchange = ccxt.binance()
+        ahora_utc = datetime.now(timezone.utc)
+        desde = exchange.parse8601((ahora_utc - timedelta(days=dias)).strftime('%Y-%m-%dT%H:%M:%S'))
+
+        symbol = SYMBOL_MAP.get(moneda, f"{moneda}/USDT")
+        logger.info(f"[DESCARGA] {moneda} ({dias} días, {timeframe}) desde Binance con symbol={symbol}...")
+
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=desde, limit=1000)
+        if not ohlcv:
+            logger.warning(f"{moneda}: sin datos válidos en Binance")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["time_open"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        delta = pd.to_timedelta("1d") if timeframe == "1d" else pd.to_timedelta("1h")
+        df["time_close"] = df["time_open"] + delta
+
+        df["nombre"] = moneda
+        df["fuente"] = "binance"
+
+        return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
+
+    except Exception as e:
+        logger.error(f"{moneda}: error en obtener_historicos_binance → {e}")
+        return pd.DataFrame()
 
 # ============================
 if __name__ == "__main__":
