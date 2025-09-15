@@ -77,25 +77,42 @@ def generar_grafico(moneda: str, dias: int = 30):
     return buf
 # ============================ # 🔹 Obtener históricos desde CoinGecko
 def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
+    """
+    Usa CoinGecko como último recurso, con backoff para evitar rate limits.
+    """
     id_map = {
         "BTC": "bitcoin", "ETH": "ethereum",
         "ADA": "cardano", "SHIB": "shiba-inu", "SOL": "solana"
     }
     if moneda not in id_map:
         return pd.DataFrame()
-    interval = "daily" if timeframe == "1d" else "daily"  # 🔹 forzamos daily
+
+    interval = "hourly" if timeframe == "1h" else "daily"
     if timeframe == "1h":
         logger.warning(f"{moneda}: CoinGecko gratis no soporta interval=hourly → usando daily")
-    
+        interval = "daily"
+
     url = (f"https://api.coingecko.com/api/v3/coins/{id_map[moneda]}/market_chart"
            f"?vs_currency=eur&days={dias}&interval={interval}")
-    r = requests.get(url, timeout=20)
-    if not r.ok:
-        logger.error(f"{moneda}: error en CoinGecko {r.status_code} {r.text}")
+
+    for intento in range(3):
+        r = requests.get(url, timeout=20)
+        if r.status_code == 429:
+            espera = 5 * (intento + 1)
+            logger.warning(f"{moneda}: rate limit en CoinGecko, reintentando en {espera}s...")
+            time.sleep(espera)
+            continue
+        if r.ok:
+            break
+    else:
+        logger.error(f"{moneda}: fallo definitivo en CoinGecko (429)")
         return pd.DataFrame()
+
     data = r.json()
     if "prices" not in data:
+        logger.warning(f"{moneda}: sin 'prices' en respuesta de CoinGecko")
         return pd.DataFrame()
+
     df = pd.DataFrame({
         "time_open": [pd.to_datetime(p[0], unit="ms", utc=True) for p in data["prices"]],
         "close": [p[1] for p in data["prices"]],
@@ -105,11 +122,12 @@ def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
     df["low"] = df["close"]
     df["volume"] = [v[1] for v in data.get("total_volumes", [[0, 0]] * len(df))]
 
-    delta = pd.to_timedelta("1d")
-    df["time_close"] = df["time_open"] + delta
+    df["time_close"] = df["time_open"] + (pd.to_timedelta("1h") if timeframe == "1h" else pd.to_timedelta("1d"))
     df["nombre"] = moneda
     df["fuente"] = "coingecko"
+
     return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
+
 # ============================
 # 🔹 Indicadores
 def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -217,21 +235,16 @@ def insertar_filas_dias(df: pd.DataFrame) -> int:
 # ============================ # 
 def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
     """
-    Descarga OHLCV desde Kraken usando ccxt, con símbolos fijos (sin load_markets).
+    Descarga OHLCV desde Kraken usando ccxt (rápido y sin load_markets pesado).
     """
     try:
-        exchange = ccxt.kraken({
-            "enableRateLimit": True,
-            "timeout": 10000  # 10s para evitar bloqueos
-        })
-
-        symbol = KRAKEN_SYMBOLS.get(moneda.upper())
-        if not symbol:
-            logger.warning(f"{moneda}: no soportada en Kraken")
-            return pd.DataFrame()
+        exchange = ccxt.kraken()
 
         ahora_utc = datetime.now(timezone.utc)
-        desde = exchange.milliseconds() - dias * 24 * 60 * 60 * 1000
+        desde = exchange.parse8601((ahora_utc - timedelta(days=dias)).strftime('%Y-%m-%dT%H:%M:%S'))
+
+        # Definir symbol manualmente (evitamos exchange.load_markets())
+        symbol = KRAKEN_SYMBOLS.get(moneda, f"{moneda}/EUR")
 
         logger.info(f"[DESCARGA] {moneda} ({dias} días, {timeframe}) desde Kraken con symbol={symbol}...")
 
@@ -246,36 +259,34 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
         delta = pd.to_timedelta("1d") if timeframe == "1d" else pd.to_timedelta("1h")
         df["time_close"] = df["time_open"] + delta
 
-        # Ajustar rango esperado
+        # 🔧 Aquí estaba el bug → usamos pd.Timestamp para floor()
+        end_time = pd.Timestamp(ahora_utc, tz="UTC").floor("h" if timeframe == "1h" else "d")
         expected_times = pd.date_range(
             start=df["time_open"].min(),
-            end=ahora_utc.floor("h"),
+            end=end_time,
             freq="1h" if timeframe == "1h" else "1d",
             tz="UTC"
         )
+
         df = df.set_index("time_open").reindex(expected_times)
         df.index.name = "time_open"
 
-        # Completar datos
-        df[["open", "high", "low", "close", "volume"]] = (
-            df[["open", "high", "low", "close", "volume"]].ffill().bfill()
-        )
-        df["volume"] = df["volume"].fillna(0)
-
         df["nombre"] = moneda
         df["fuente"] = "kraken"
-        df["time_close"] = df.index + delta
 
+        # Relleno forward/backward para gaps
+        df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].ffill().bfill()
+        df["volume"] = df["volume"].fillna(0)
+
+        df["time_close"] = df.index + delta
         df = df.reset_index()
 
-        return df[[
-            "nombre", "time_open", "time_close",
-            "open", "high", "low", "close", "volume", "fuente"
-        ]]
+        return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
 
     except Exception as e:
         logger.error(f"{moneda}: error en obtener_historicos_kraken → {e}")
         return pd.DataFrame()
+
 # ============================ # 
 
 def obtener_historicos(moneda, dias, timeframe="1h"):
@@ -434,15 +445,10 @@ def resumen_completo(monedas: list) -> dict:
                    "════════════════════════\n"
                    f"🔄 _Actualizado: {actualizado}_")
     return {"status": "ok", "resumen_txt": resumen_txt}
-
+# ============================
 def obtener_historicos_cmc(moneda, dias, timeframe="1h"):
-    """
-    Usa CoinMarketCap para obtener OHLCV históricos.
-    """
-    symbol_map = {"BTC": "bitcoin", "ETH": "ethereum", "ADA": "cardano", "SHIB": "shiba-inu", "SOL": "solana"}
-    if moneda not in symbol_map:
-        return pd.DataFrame()
-    url = f"https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
+    """ Usa CoinMarketCap para obtener OHLCV históricos. """
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical"
     params = {
         "symbol": moneda,
         "convert": "EUR",
@@ -451,13 +457,19 @@ def obtener_historicos_cmc(moneda, dias, timeframe="1h"):
         "interval": "hourly" if timeframe == "1h" else "daily"
     }
     headers = {"X-CMC_PRO_API_KEY": os.getenv("COINMARKETCAP_API_KEY")}
+
     r = requests.get(url, headers=headers, params=params, timeout=30)
+    if r.status_code == 403:
+        logger.warning(f"{moneda}: CoinMarketCap no soportado en tu plan, saltando...")
+        return pd.DataFrame()
     if not r.ok:
         logger.error(f"{moneda}: error en CoinMarketCap {r.status_code} {r.text}")
         return pd.DataFrame()
+
     data = r.json()
     if "data" not in data or "quotes" not in data["data"]:
         return pd.DataFrame()
+
     registros = []
     for q in data["data"]["quotes"]:
         registros.append({
@@ -472,6 +484,7 @@ def obtener_historicos_cmc(moneda, dias, timeframe="1h"):
             "fuente": "coinmarketcap"
         })
     return pd.DataFrame(registros)
+
 # ============================
 if __name__ == "__main__":
     monedas = ["BTC", "ETH", "ADA", "SHIB", "SOL"]
