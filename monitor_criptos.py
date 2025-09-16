@@ -115,13 +115,13 @@ def endpoint_resumen():
     except Exception as e:
         logger.exception("Error en /resumen")
         return jsonify({"status": "error", "error": str(e), "trace": traceback.format_exc()}), 500
-
+#==========================
 @app.route("/historicos_auto", methods=["GET"])
 def endpoint_historicos_auto():
     """
     Recorre monedas (o ?monedas=BTC,ETH) y llama a guardar_datos(...).
     También llama guardar_datos_dias(...) para históricos diarios si se solicita (?dias_dias=90).
-    Incluye delay entre monedas para evitar rate limits.
+    ⚠️ No usamos time.sleep porque bloquea Gunicorn → worker timeout.
     """
     monedas = request.args.get("monedas")
     if monedas:
@@ -154,15 +154,13 @@ def endpoint_historicos_auto():
 
             resultados.append({"moneda": m, "1h": r1, "1d": r2})
 
-            # 🔹 Anti-rate-limit → espera 2s antes de pasar a la siguiente moneda
-            time.sleep(2)
-
         return jsonify({"status": "ok", "resultados": resultados})
 
     except Exception as e:
         logger.exception("Error en /historicos_auto")
         return jsonify({"status": "error", "error": str(e), "trace": traceback.format_exc()}), 500
 
+#=====================
 @app.route("/grafico", methods=["GET"])
 def endpoint_grafico():
     """
@@ -210,4 +208,5 @@ def endpoint_grafico_send():
 if __name__ == "__main__":
     logger.info(f"Arrancando monitor_criptos en {HOST}:{PORT}")
     app.run(host=HOST, port=PORT, debug=False)
+
 
