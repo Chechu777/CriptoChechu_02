@@ -119,42 +119,42 @@ def endpoint_resumen():
 @app.route("/historicos_auto", methods=["GET"])
 def endpoint_historicos_auto():
     """
-    Recorre monedas (o ?monedas=BTC,ETH) y llama a guardar_datos(...).
-    También llama guardar_datos_dias(...) para históricos diarios si se solicita (?dias_dias=90).
-    ⚠️ No usamos time.sleep porque bloquea Gunicorn → worker timeout.
+    Procesa SOLO UNA moneda por request.
+    Usa ?moneda=BTC para forzar, o toma la primera de DEFAULT_MONEDAS.
+    Así evitamos worker timeouts en Render.
     """
-    monedas = request.args.get("monedas")
-    if monedas:
-        monedas_list = [m.strip().upper() for m in monedas.split(",") if m.strip()]
+    moneda = request.args.get("moneda")
+    if moneda:
+        moneda = moneda.strip().upper()
     else:
-        monedas_list = [m.strip().upper() for m in DEFAULT_MONEDAS]
+        moneda = DEFAULT_MONEDAS[0]  # si no se pasa, usa la primera
 
     dias = int(request.args.get("dias", 7))
     dias_dias = int(request.args.get("dias_dias", 90))
     rellenar_huecos = request.args.get("rellenar_huecos", "true").lower() in ("1", "true", "yes")
 
-    resultados = []
+    resultados = {}
     try:
-        for m in monedas_list:
-            try:
-                logger.info(f"Guardando históricos 1h para {m} (dias={dias}, rellenar={rellenar_huecos})")
-                r1 = guardar_datos(moneda=m, dias=dias, timeframe="1h", rellenar_huecos=rellenar_huecos)
-                logger.info(f"Resultado guardar_datos({m}): {r1}")
-            except Exception as e:
-                logger.exception(f"Error guardando datos 1h para {m}")
-                r1 = f"error: {str(e)}"
+        # --- 1h ---
+        try:
+            logger.info(f"Guardando históricos 1h para {moneda} (dias={dias}, rellenar={rellenar_huecos})")
+            r1 = guardar_datos(moneda=moneda, dias=dias, timeframe="1h", rellenar_huecos=rellenar_huecos)
+            logger.info(f"Resultado guardar_datos({moneda}): {r1}")
+        except Exception as e:
+            logger.exception(f"Error guardando datos 1h para {moneda}")
+            r1 = {"error": str(e)}
 
-            try:
-                logger.info(f"Guardando históricos 1d para {m} (dias={dias_dias})")
-                r2 = guardar_datos_dias(moneda=m, dias=dias_dias)
-                logger.info(f"Resultado guardar_datos_dias({m}): {r2}")
-            except Exception as e:
-                logger.exception(f"Error guardando datos 1d para {m}")
-                r2 = {"error": str(e)}
+        # --- 1d ---
+        try:
+            logger.info(f"Guardando históricos 1d para {moneda} (dias={dias_dias})")
+            r2 = guardar_datos_dias(moneda=moneda, dias=dias_dias)
+            logger.info(f"Resultado guardar_datos_dias({moneda}): {r2}")
+        except Exception as e:
+            logger.exception(f"Error guardando datos 1d para {moneda}")
+            r2 = {"error": str(e)}
 
-            resultados.append({"moneda": m, "1h": r1, "1d": r2})
-
-        return jsonify({"status": "ok", "resultados": resultados})
+        resultados = {"moneda": moneda, "1h": r1, "1d": r2}
+        return jsonify({"status": "ok", "resultado": resultados})
 
     except Exception as e:
         logger.exception("Error en /historicos_auto")
@@ -208,5 +208,6 @@ def endpoint_grafico_send():
 if __name__ == "__main__":
     logger.info(f"Arrancando monitor_criptos en {HOST}:{PORT}")
     app.run(host=HOST, port=PORT, debug=False)
+
 
 
