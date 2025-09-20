@@ -289,41 +289,65 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
         return pd.DataFrame()
 
 # ============================ # 
+# Detectar si estamos en Render
+IS_RENDER = bool(os.getenv("RENDER"))
+
 def obtener_historicos(moneda, dias, timeframe="1h"):
-    # 1) Binance primero
-    try:
-        df = obtener_historicos_binance(moneda, dias, timeframe)
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.warning(f"{moneda}: Binance falló ({e}), probando Kraken...")
+    """
+    Intenta obtener históricos en cascada:
+    - En Render: CoinMarketCap → CoinGecko
+    - En local: Kraken → CoinMarketCap → CoinGecko
+    """
 
-    # 2) Kraken como fallback
-    try:
-        df = obtener_historicos_kraken(moneda, dias, timeframe)
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.warning(f"{moneda}: Kraken falló ({e}), probando CoinMarketCap...")
+    # 🔹 Render: evitamos Kraken y Binance para no romper workers
+    if IS_RENDER:
+        # 1) CoinMarketCap
+        try:
+            df = obtener_historicos_cmc(moneda, dias, timeframe)
+            if not df.empty:
+                return df
+        except Exception as e:
+            logger.warning(f"{moneda}: CoinMarketCap falló ({e}), probando CoinGecko...")
 
-    # 3) CoinMarketCap
-    try:
-        df = obtener_historicos_cmc(moneda, dias, timeframe)
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.warning(f"{moneda}: CoinMarketCap falló ({e}), probando CoinGecko...")
+        # 2) CoinGecko
+        try:
+            df = obtener_historicos_coingecko(moneda, dias, timeframe)
+            if not df.empty:
+                return df
+        except Exception as e:
+            logger.error(f"{moneda}: CoinGecko falló definitivamente ({e})")
 
-    # 4) CoinGecko
-    try:
-        df = obtener_historicos_coingecko(moneda, dias, timeframe)
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.error(f"{moneda}: CoinGecko falló definitivamente ({e})")
+        logger.error(f"{moneda}: ❌ sin datos válidos en ninguna fuente (Render)")
+        return pd.DataFrame()
 
-    logger.error(f"{moneda}: ❌ sin datos válidos en ninguna fuente")
-    return pd.DataFrame()
+    # 🔹 Local: probamos Kraken primero
+    else:
+        # 1) Kraken
+        try:
+            df = obtener_historicos_kraken(moneda, dias, timeframe)
+            if not df.empty:
+                return df
+        except Exception as e:
+            logger.warning(f"{moneda}: Kraken falló ({e}), probando CoinMarketCap...")
+
+        # 2) CoinMarketCap
+        try:
+            df = obtener_historicos_cmc(moneda, dias, timeframe)
+            if not df.empty:
+                return df
+        except Exception as e:
+            logger.warning(f"{moneda}: CoinMarketCap falló ({e}), probando CoinGecko...")
+
+        # 3) CoinGecko
+        try:
+            df = obtener_historicos_coingecko(moneda, dias, timeframe)
+            if not df.empty:
+                return df
+        except Exception as e:
+            logger.error(f"{moneda}: CoinGecko falló definitivamente ({e})")
+
+        logger.error(f"{moneda}: ❌ sin datos válidos en ninguna fuente (Local)")
+        return pd.DataFrame()
 
 # ====================# 🔹 Guardar datos
 def guardar_datos(moneda, dias, timeframe="1h", rellenar_huecos=True):
@@ -522,5 +546,6 @@ if __name__ == "__main__":
         print(guardar_datos_dias(m, dias=30))
     print("=== ANALISIS ===")
     print(resumen_completo(monedas))
+
 
 
