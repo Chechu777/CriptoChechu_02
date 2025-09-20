@@ -238,8 +238,10 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
     Descarga OHLCV desde Kraken usando ccxt (rápido y sin load_markets pesado).
     """
     try:
-        exchange = ccxt.kraken()
-
+        exchange = ccxt.kraken({
+            "enableRateLimit": True,
+            "options": {"fetchMarkets": False}
+        })
         ahora_utc = datetime.now(timezone.utc)
         desde = exchange.parse8601((ahora_utc - timedelta(days=dias)).strftime('%Y-%m-%dT%H:%M:%S'))
 
@@ -287,15 +289,16 @@ def obtener_historicos_kraken(moneda, dias, timeframe="1h"):
         return pd.DataFrame()
 
 # ============================ # 
-
 def obtener_historicos(moneda, dias, timeframe="1h"):
-    """
-    Intenta obtener históricos en cascada:
-    1. Kraken (ccxt)
-    2. CoinMarketCap (API key)
-    3. CoinGecko (con backoff)
-    """
-    # 1) Kraken
+    # 1) Binance primero
+    try:
+        df = obtener_historicos_binance(moneda, dias, timeframe)
+        if not df.empty:
+            return df
+    except Exception as e:
+        logger.warning(f"{moneda}: Binance falló ({e}), probando Kraken...")
+
+    # 2) Kraken como fallback
     try:
         df = obtener_historicos_kraken(moneda, dias, timeframe)
         if not df.empty:
@@ -303,7 +306,7 @@ def obtener_historicos(moneda, dias, timeframe="1h"):
     except Exception as e:
         logger.warning(f"{moneda}: Kraken falló ({e}), probando CoinMarketCap...")
 
-    # 2) CoinMarketCap
+    # 3) CoinMarketCap
     try:
         df = obtener_historicos_cmc(moneda, dias, timeframe)
         if not df.empty:
@@ -311,15 +314,7 @@ def obtener_historicos(moneda, dias, timeframe="1h"):
     except Exception as e:
         logger.warning(f"{moneda}: CoinMarketCap falló ({e}), probando CoinGecko...")
 
-    # 2b) Binance
-    try:
-        df = obtener_historicos_binance(moneda, dias, timeframe)
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.warning(f"{moneda}: Binance falló ({e}), probando CoinGecko...")
-
-    # 3) CoinGecko
+    # 4) CoinGecko
     try:
         df = obtener_historicos_coingecko(moneda, dias, timeframe)
         if not df.empty:
@@ -330,9 +325,7 @@ def obtener_historicos(moneda, dias, timeframe="1h"):
     logger.error(f"{moneda}: ❌ sin datos válidos en ninguna fuente")
     return pd.DataFrame()
 
-# ====================
-
-# 🔹 Guardar datos
+# ====================# 🔹 Guardar datos
 def guardar_datos(moneda, dias, timeframe="1h", rellenar_huecos=True):
     df = obtener_historicos(moneda, dias, timeframe)
     if df.empty:
@@ -529,4 +522,5 @@ if __name__ == "__main__":
         print(guardar_datos_dias(m, dias=30))
     print("=== ANALISIS ===")
     print(resumen_completo(monedas))
+
 
