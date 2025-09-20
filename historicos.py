@@ -77,42 +77,36 @@ def generar_grafico(moneda: str, dias: int = 30):
     return buf
 # ============================ # 🔹 Obtener históricos desde CoinGecko
 def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
-    """
-    Usa CoinGecko como último recurso, con backoff para evitar rate limits.
-    """
+    """ Usa CoinGecko como último recurso. 
+    En Render evitamos time.sleep → si devuelve 429, se retorna vacío directamente. """
+    
     id_map = {
         "BTC": "bitcoin", "ETH": "ethereum",
         "ADA": "cardano", "SHIB": "shiba-inu", "SOL": "solana"
     }
     if moneda not in id_map:
         return pd.DataFrame()
-
     interval = "hourly" if timeframe == "1h" else "daily"
     if timeframe == "1h":
         logger.warning(f"{moneda}: CoinGecko gratis no soporta interval=hourly → usando daily")
         interval = "daily"
-
     url = (f"https://api.coingecko.com/api/v3/coins/{id_map[moneda]}/market_chart"
            f"?vs_currency=eur&days={dias}&interval={interval}")
-
-    for intento in range(3):
+    try:
         r = requests.get(url, timeout=20)
         if r.status_code == 429:
-            espera = 5 * (intento + 1)
-            logger.warning(f"{moneda}: rate limit en CoinGecko, reintentando en {espera}s...")
-            time.sleep(espera)
-            continue
-        if r.ok:
-            break
-    else:
-        logger.error(f"{moneda}: fallo definitivo en CoinGecko (429)")
+            logger.warning(f"{moneda}: rate limit en CoinGecko (429) → devolviendo vacío")
+            return pd.DataFrame()
+        if not r.ok:
+            logger.error(f"{moneda}: fallo {r.status_code} en CoinGecko")
+            return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"{moneda}: error de red en CoinGecko → {e}")
         return pd.DataFrame()
-
     data = r.json()
     if "prices" not in data:
         logger.warning(f"{moneda}: sin 'prices' en respuesta de CoinGecko")
         return pd.DataFrame()
-
     df = pd.DataFrame({
         "time_open": [pd.to_datetime(p[0], unit="ms", utc=True) for p in data["prices"]],
         "close": [p[1] for p in data["prices"]],
@@ -127,7 +121,6 @@ def obtener_historicos_coingecko(moneda, dias, timeframe="1h"):
     df["fuente"] = "coingecko"
 
     return df[["nombre", "time_open", "time_close", "open", "high", "low", "close", "volume", "fuente"]]
-
 # ============================
 # 🔹 Indicadores
 def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -546,6 +539,7 @@ if __name__ == "__main__":
         print(guardar_datos_dias(m, dias=30))
     print("=== ANALISIS ===")
     print(resumen_completo(monedas))
+
 
 
 
